@@ -26,7 +26,7 @@ Sign-in uses the OAuth 2.0 **Authorization Code + PKCE** flow with a **loopback 
 3. After sign-in, Aprimo redirects to `http://127.0.0.1:3002/callback`, which a local listener inside the app catches.
 4. The app exchanges the code for tokens directly against Aprimo and stores them encrypted using your **OS keychain key** (via Electron `safeStorage`) — never in plaintext, never in the shipped binary.
 
-Tokens are refreshed automatically if your registration issues refresh tokens (the app requests `offline_access` and auto-detects). Otherwise the browser sign-in re-opens when the access token expires.
+The app requests `offline_access` and refreshes tokens silently, so the registration **must** have **Enable Refresh Token** turned on (see setup below). Without it, the access token expires after about an hour and the app sends you back to the sign-in screen, which interrupts long jobs such as a Bulk Versioning run.
 
 ### One-time Aprimo setup
 
@@ -34,6 +34,7 @@ In Aprimo, go to **Settings → Registrations** and create (or edit) a registrat
 
 - **Grant type:** Authorization Code with PKCE
 - **Redirect URI:** `http://127.0.0.1:3002/callback` (this exact string)
+- **Enable Refresh Token:** turned on. **Required.** The tools keep you signed in by refreshing your token in the background; without this setting your session ends when the access token expires.
 
 Note the **Client ID** and **Client Secret** — you'll enter them in the app on first launch.
 

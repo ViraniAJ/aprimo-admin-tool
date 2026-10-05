@@ -107,6 +107,8 @@
     <h2 style="margin-top:0">Connect to Aprimo</h2>
     <p class="muted small">Sign in happens in your browser. Register this exact redirect URI in your
       Aprimo PKCE registration: <code id="redirectUriHint">…</code></p>
+    <p class="small" style="margin-top:-4px"><strong>Required:</strong> turn on <strong>Enable Refresh Token</strong> on that registration
+      (Settings → Registrations). Without it your session ends when the access token expires, which interrupts long jobs like Bulk Versioning.</p>
     <label class="field"><span>Environment</span>
       <input id="env" type="text" placeholder="your-environment (the &lt;env&gt; in &lt;env&gt;.aprimo.com)" autocomplete="off" />
     </label>
