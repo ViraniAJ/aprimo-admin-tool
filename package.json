@@ -14,7 +14,7 @@
     "bundle": "esbuild renderer/app.js --bundle --format=iife --outfile=renderer/bundle.js --platform=browser",
     "prestart": "npm run bundle:all",
     "prebuild": "npm run bundle:all",
-    "bundle:bv": "esbuild bulk-versioning/src/main.tsx --bundle --format=iife --outfile=renderer/bulk-versioning.js --platform=browser --jsx=automatic --tsconfig=bulk-versioning/tsconfig.json --define:process.env.NODE_ENV=\\\"production\\\" --minify --log-level=warning",
+    "bundle:bv": "esbuild bulk-versioning/src/main.tsx --bundle --format=iife --outfile=renderer/bulk-versioning.js --platform=browser --jsx=automatic --tsconfig=bulk-versioning/tsconfig.json --minify --log-level=warning",
     "css:bv": "tailwindcss -i bulk-versioning/src/styles.css -o renderer/bulk-versioning.css --minify",
     "typecheck:bv": "tsc -p bulk-versioning/tsconfig.json",
     "bundle:all": "npm run bundle && npm run bundle:bv && npm run css:bv"
