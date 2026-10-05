@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require("electron")
+const { app, BrowserWindow, ipcMain, shell } = require("electron")
 const path = require("path")
 const auth = require("./auth")
 
@@ -16,6 +16,18 @@ function createWindow() {
     },
   })
   win.loadFile(path.join(__dirname, "..", "renderer", "index.html"))
+
+  // Links that open a new window (e.g. "Open in Aprimo") go to the system
+  // browser instead of a bare Electron window.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https:\/\//i.test(url)) shell.openExternal(url)
+    return { action: "deny" }
+  })
+  // The app only ever navigates between its own pages; anything else (such
+  // as a file dropped outside a drop zone) is blocked.
+  win.webContents.on("will-navigate", (event, url) => {
+    if (!url.startsWith("file:") || !/\.html(\?|#|$)/.test(url)) event.preventDefault()
+  })
 }
 
 app.whenReady().then(() => {

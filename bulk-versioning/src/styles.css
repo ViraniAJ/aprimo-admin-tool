@@ -1,0 +1,91 @@
+@import "tailwindcss" source(none);
+@source "./";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Palette matched to the rest of Aprimo Admin Tools (renderer/index.html). */
+:root {
+  --background: #ffffff;
+  --foreground: #0f172a;
+  --card: #f8fafc;
+  --card-foreground: #0f172a;
+  --popover: #ffffff;
+  --popover-foreground: #0f172a;
+  --primary: #2563eb;
+  --primary-foreground: #ffffff;
+  --secondary: #eff6ff;
+  --secondary-foreground: #1e3a8a;
+  --muted: #f1f5f9;
+  --muted-foreground: #64748b;
+  --accent: #eff6ff;
+  --accent-foreground: #1d4ed8;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --success: #16a34a;
+  --border: #e2e8f0;
+  --input: #e2e8f0;
+  --ring: #93c5fd;
+  --radius: 0.625rem;
+}
+
+.dark {
+  --background: #0b1120;
+  --foreground: #e2e8f0;
+  --card: #0f172a;
+  --card-foreground: #e2e8f0;
+  --popover: #0f172a;
+  --popover-foreground: #e2e8f0;
+  --primary: #3b82f6;
+  --primary-foreground: #ffffff;
+  --secondary: #0f1e3d;
+  --secondary-foreground: #bfdbfe;
+  --muted: #111a2e;
+  --muted-foreground: #94a3b8;
+  --accent: #0f1e3d;
+  --accent-foreground: #93c5fd;
+  --destructive: #f87171;
+  --destructive-foreground: #ffffff;
+  --success: #4ade80;
+  --border: #1e293b;
+  --input: #1e293b;
+  --ring: #1d4ed8;
+}
+
+@theme inline {
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground font-sans text-sm;
+  }
+}

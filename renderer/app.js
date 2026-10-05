@@ -446,6 +446,8 @@ async function init() {
   // Tile navigation
   $("tileClassifications").onclick = () => showTool()
   $("tileDataModel").onclick = () => showDataModel()
+  // Bulk Versioning is its own page (React + Tailwind, built from bulk-versioning/src).
+  $("tileBulkVersioning").onclick = () => { window.location.href = "bulk-versioning.html" }
 
   // Classifications tool controls
   $("reloadBtn").onclick = () => load()

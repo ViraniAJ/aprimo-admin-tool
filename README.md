@@ -12,6 +12,11 @@ Export your classification tree to Excel. For every selected node: hierarchy pat
 ### Data Model Explorer
 Select any field definition to see a visual graph of everywhere it is used — field groups, content types, classifications, cross-field expression references, and rules.
 
+### Bulk Versioning
+Pick classifications from the tree (a parent includes all of its children), then drop updated files or a whole folder. Each local file is matched by name to the record whose master file has the same or a similar name, ignoring revision markers like `_v2` or `final`, sizes like `10x10`, and counters like `(002)`. Matches are colour-coded by confidence and can be filtered; records can also be picked manually. Hovering a row compares the current version in Aprimo with the proposed file. Version one row at a time, or everything in the current filter. Each file is uploaded and added as a new version of the record's master file; nothing is created or deleted.
+
+This tool is the desktop build of the Bulk Versioning page in [virani-editor-tools](https://github.com/ViraniAJ/aprimo-editor-tools). Its source lives in `bulk-versioning/src` (React + Tailwind, bundled by esbuild into `renderer/bulk-versioning.js` and `.css`) and runs as its own page so its styles never touch the other tools. The matching logic in `bulk-versioning/src/lib` is shared with the web version; keep the two in step when changing it.
+
 ## How auth works
 
 Sign-in uses the OAuth 2.0 **Authorization Code + PKCE** flow with a **loopback redirect** (RFC 8252 — the pattern recommended for native apps):
@@ -51,7 +56,7 @@ To keep deployment simple for this sample tool, the client secret is stored loca
 
 ```bash
 npm install
-npm start        # bundles the renderer, then launches the app
+npm start        # bundles the renderer and Bulk Versioning, then launches the app
 ```
 
 ## Build a distributable
@@ -76,6 +81,9 @@ renderer/
   app.js        Main renderer entry point, classifications exporter logic
   data-model.js Data model explorer logic (Cytoscape graph)
   index.html    UI shell and styles
+  bulk-versioning.html  Bulk Versioning page (loads the built .js and .css)
+bulk-versioning/
+  src/          Bulk Versioning source: page, matching logic, UI components
 build/
   icon.png      App icon (source; electron-builder converts per platform)
 .github/
