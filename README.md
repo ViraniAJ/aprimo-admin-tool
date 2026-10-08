@@ -4,6 +4,37 @@ A standalone desktop app (Electron) with tools for Aprimo administrators. Sign i
 
 > **This is a sample tool.** Embedding a client secret in a desktop application is acceptable for internal use by a small number of trusted admins, but a server-side token broker is recommended for broader distribution.
 
+## Install
+
+Download the installer for your platform from the [latest release](https://github.com/ViraniAJ/aprimo-admin-tool/releases/latest). The builds are not signed with an Apple or Microsoft developer certificate, so each platform needs one extra step the first time.
+
+### macOS (Apple Silicon)
+
+1. Open the `.dmg` and drag **Aprimo Admin Tools** into **Applications**.
+2. **Before opening it**, run this once in Terminal. Without it, macOS reports that the app "is damaged and can't be opened" and offers to move it to the Trash:
+
+   ```
+   xattr -cr "/Applications/Aprimo Admin Tools.app"
+   ```
+
+3. Open the app from Applications.
+
+The app is not actually damaged. The command removes the "downloaded from the internet" flag that makes macOS reject unsigned apps. If you already saw the message, click **Cancel** (not Move to Trash), run the command, and open the app again.
+
+If macOS still refuses, re-sign the app on your machine, then open it again:
+
+```
+codesign --force --deep --sign - "/Applications/Aprimo Admin Tools.app"
+```
+
+### Windows
+
+Run the installer. If **Windows protected your PC** appears, choose **More info**, then **Run anyway**. On company-managed PCs, IT policy may block unsigned apps entirely; ask IT to allow it.
+
+### Then
+
+Set up the Aprimo registration as described in [One-time Aprimo setup](#one-time-aprimo-setup), including **Enable Refresh Token**, and sign in.
+
 ## Tools
 
 ### Classifications Exporter
