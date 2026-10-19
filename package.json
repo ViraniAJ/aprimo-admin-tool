@@ -1,6 +1,6 @@
 {
   "name": "aprimo-admin-tools",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "description": "Standalone desktop admin tools for Aprimo \u2014 classifications exporter, data model explorer, bulk versioning, and more.",
   "main": "electron/main.js",
   "author": "",
@@ -26,6 +26,7 @@
   },
   "devDependencies": {
     "@radix-ui/react-checkbox": "1.3.3",
+    "@radix-ui/react-dialog": "1.1.15",
     "@radix-ui/react-hover-card": "1.1.15",
     "@radix-ui/react-label": "2.1.8",
     "@radix-ui/react-progress": "1.1.8",

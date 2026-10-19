@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { DropZone } from "@/components/ui/drop-zone"
 import { toast } from "sonner"
 import type { ClassificationNode } from "@/models"
@@ -289,16 +290,13 @@ export default function BulkVersioningPage() {
     }
   }
 
-  /** Every unmatched file becomes a new draft record. Needs a second click to confirm. */
+  const pendingCreate = () => items.filter((it) => !it.targetId && !finished(it) && it.status !== "uploading" && it.status !== "creating" && it.status !== "versioning")
+
+  /** Every unmatched file becomes a new draft record. Runs only after the confirmation dialog. */
   async function createUnmatched() {
-    const todo = items.filter((it) => !it.targetId && !finished(it) && it.status !== "uploading" && it.status !== "creating" && it.status !== "versioning")
-    if (!todo.length) return
-    if (!confirmCreate) {
-      setConfirmCreate(true)
-      setTimeout(() => setConfirmCreate(false), 6000)
-      return
-    }
+    const todo = pendingCreate()
     setConfirmCreate(false)
+    if (!todo.length) return
     setCreatingAll(true)
     let ok = 0
     for (const it of todo) if (await createOne(it)) ok++
@@ -501,10 +499,30 @@ export default function BulkVersioningPage() {
                       <SelectItem value="__none" className="text-xs">No classification</SelectItem>
                     </SelectContent>
                   </Select>
-                  <Button variant={confirmCreate ? "default" : "outline"} size="sm" className="h-7 text-xs ml-auto" onClick={createUnmatched} disabled={busy || unmatched === 0} title="Upload every unmatched file as a new draft record">
-                    {creatingAll ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Creating…</> : confirmCreate ? <>Click again to create {unmatched} record{unmatched === 1 ? "" : "s"}</> : <><FilePlus2 className="w-3.5 h-3.5" /> Create {unmatched} unmatched as new records</>}
+                  <Button variant="outline" size="sm" className="h-7 text-xs ml-auto" onClick={() => setConfirmCreate(true)} disabled={busy || unmatched === 0} title="Upload every unmatched file as a new draft record">
+                    {creatingAll ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Creating…</> : <><FilePlus2 className="w-3.5 h-3.5" /> Create {unmatched} unmatched as new records</>}
                   </Button>
                 </div>
+                <Dialog open={confirmCreate} onOpenChange={setConfirmCreate}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Create {unmatched} new record{unmatched === 1 ? "" : "s"} in Aprimo?</DialogTitle>
+                      <DialogDescription asChild>
+                        <div className="space-y-2 text-sm">
+                          <p>
+                            This uploads {unmatched} file{unmatched === 1 ? "" : "s"} to <span className="font-mono">{connection?.environment}</span> and creates {unmatched === 1 ? "a new draft record" : `${unmatched} new draft records`}
+                            {createIn ? <> classified under <strong>{classificationLabel(createIn)}</strong></> : <> with <strong>no classification</strong></>}.
+                          </p>
+                          <p>No existing record is changed. The new records can only be removed in Aprimo afterwards.</p>
+                        </div>
+                      </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setConfirmCreate(false)}>Cancel</Button>
+                      <Button onClick={createUnmatched}><FilePlus2 className="w-4 h-4" /> Yes, create {unmatched} record{unmatched === 1 ? "" : "s"}</Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
                 <Table>
                   <TableHeader>
                     <TableRow>
