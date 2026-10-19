@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Expander } from "aprimo-js"
 import type { Record as AprimoSDKRecord, FileVersion } from "aprimo-js/model"
-import { Loader2, Upload, Layers, FolderOpen, FileIcon, CheckCircle2, AlertCircle, Trash2, ExternalLink, RefreshCw, X, PackageOpen } from "lucide-react"
+import { Loader2, Upload, Layers, FolderOpen, FileIcon, CheckCircle2, AlertCircle, Trash2, ExternalLink, RefreshCw, X, PackageOpen, FilePlus2 } from "lucide-react"
 import { ClassificationTreePicker } from "@/components/classification-tree-picker"
 import { useAprimo } from "@/aprimo"
 import { Button } from "@/components/ui/button"
@@ -26,7 +26,12 @@ import { buildUnmatchedZip, downloadBlob, exportFileName, type ExportEntry } fro
 // confirmed matches at once. The local file becomes a new version of the
 // record's master file; nothing is created and nothing is deleted.
 
-type Status = "pending" | "uploading" | "versioning" | "done" | "error"
+type Status = "pending" | "uploading" | "versioning" | "done" | "creating" | "created" | "error"
+
+/** Versioned or created: the row is finished and leaves the matching counts. */
+function finished(it: { status: Status }): boolean {
+  return it.status === "done" || it.status === "created"
+}
 
 const BROWSER_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml", "image/avif", "image/bmp"])
 
@@ -42,6 +47,8 @@ interface LocalItem {
   auto: boolean
   /** Text typed into the row's manual search; undefined when closed. */
   search?: string
+  /** Id of the record created from this file, when "New record" was used. */
+  createdId?: string
   status: Status
   progress: number
   error?: string
@@ -72,6 +79,10 @@ export default function BulkVersioningPage() {
   const [running, setRunning] = useState(false)
   const [filter, setFilter] = useState<MatchFilter>("all")
   const [exporting, setExporting] = useState<number | null>(null)
+  /** Classification new records are created in; "" means none. Defaults to the first selected. */
+  const [createIn, setCreateIn] = useState<string>("")
+  const [confirmCreate, setConfirmCreate] = useState(false)
+  const [creatingAll, setCreatingAll] = useState(false)
 
   useEffect(() => {
     if (!isConnected || !client) return
@@ -93,6 +104,9 @@ export default function BulkVersioningPage() {
   }, [])
 
   const classificationIds = useMemo(() => Array.from(selectedIds), [selectedIds])
+  useEffect(() => {
+    if (!classificationIds.includes(createIn)) setCreateIn(classificationIds[0] ?? "")
+  }, [classificationIds, createIn])
 
   // ── Load the records in the chosen classification ──────────────────────────
   async function loadTargets() {
@@ -172,7 +186,7 @@ export default function BulkVersioningPage() {
   }
 
   function rematch(item: LocalItem, pool: VersionTarget[]): LocalItem {
-    if (item.status === "done") return item
+    if (finished(item)) return item
     // The best candidate is always pre-selected; the confidence colour tells the user how much to trust it.
     const candidates = candidatesFor(item.file.name, pool)
     const best = candidates[0]
@@ -247,11 +261,56 @@ export default function BulkVersioningPage() {
     toast[ok === todo.length ? "success" : "warning"](`${ok} of ${todo.length} versioned`)
   }
 
+  // ── Create as a new record instead of versioning ───────────────────────────
+  async function createOne(item: LocalItem): Promise<boolean> {
+    if (!client) return false
+    try {
+      update(item.uid, { status: "uploading", progress: 0, error: undefined })
+      const uploadResult = await client.uploader.uploadFile(item.file, {
+        parallelLimit: 4,
+        onProgress: (uploaded, total) => update(item.uid, { progress: total > 0 ? Math.round((uploaded / total) * 100) : 0 }),
+      })
+      const token = (uploadResult.data as unknown as { token?: string } | undefined)?.token
+      if (!uploadResult.ok || !token) throw new Error(uploadResult.error?.message ?? "Upload failed")
+      update(item.uid, { status: "creating", progress: 100 })
+      const version: { id: string; fileName: string; comment?: string } = { id: token, fileName: item.file.name }
+      if (comment.trim()) version.comment = comment.trim()
+      const r = await client.records.create({
+        status: "draft",
+        ...(createIn ? { classifications: { addOrUpdate: [{ id: createIn }] } } : {}),
+        files: { master: token, addOrUpdate: [{ versions: { addOrUpdate: [version] } }] },
+      })
+      if (!r.ok || !r.data?.id) throw new Error(r.error?.message ?? "Record create failed")
+      update(item.uid, { status: "created", createdId: r.data.id, targetId: null })
+      return true
+    } catch (e) {
+      update(item.uid, { status: "error", error: e instanceof Error ? e.message : "Unknown error" })
+      return false
+    }
+  }
+
+  /** Every unmatched file becomes a new draft record. Needs a second click to confirm. */
+  async function createUnmatched() {
+    const todo = items.filter((it) => !it.targetId && !finished(it) && it.status !== "uploading" && it.status !== "creating" && it.status !== "versioning")
+    if (!todo.length) return
+    if (!confirmCreate) {
+      setConfirmCreate(true)
+      setTimeout(() => setConfirmCreate(false), 6000)
+      return
+    }
+    setConfirmCreate(false)
+    setCreatingAll(true)
+    let ok = 0
+    for (const it of todo) if (await createOne(it)) ok++
+    setCreatingAll(false)
+    toast[ok === todo.length ? "success" : "warning"](`${ok} of ${todo.length} created as new draft records`)
+  }
+
   // ── Export what could not be matched ───────────────────────────────────────
   /** Files with no record chosen (no candidate, or deliberately skipped), zipped with a manifest for manual upload. */
   async function exportUnmatched() {
     const entries: ExportEntry[] = items
-      .filter((it) => !it.targetId && it.status !== "done")
+      .filter((it) => !it.targetId && !finished(it))
       .map((it) => {
         const best = it.candidates[0]
         return {
@@ -282,20 +341,22 @@ export default function BulkVersioningPage() {
   const filterCounts = Object.fromEntries(MATCH_FILTERS.map((f) => [f.key, items.filter((it) => matchesFilter(it, f.key)).length])) as Record<MatchFilter, number>
   const versionableShown = visibleItems.filter(isVersionable).length
   const targetById = useMemo(() => new Map(targets.map((t) => [t.recordId, t])), [targets])
-  const matched = items.filter((it) => it.targetId && it.status !== "done").length
-  const lowConfidence = items.filter((it) => it.targetId && it.status !== "done" && (it.candidates.find((c) => c.target.recordId === it.targetId)?.score ?? 100) < AUTO_MATCH_SCORE && it.candidates.find((c) => c.target.recordId === it.targetId)?.reason !== "manual").length
-  const unmatched = items.filter((it) => !it.targetId && it.status !== "done").length
+  const matched = items.filter((it) => it.targetId && !finished(it)).length
+  const lowConfidence = items.filter((it) => it.targetId && !finished(it) && (it.candidates.find((c) => c.target.recordId === it.targetId)?.score ?? 100) < AUTO_MATCH_SCORE && it.candidates.find((c) => c.target.recordId === it.targetId)?.reason !== "manual").length
+  const unmatched = items.filter((it) => !it.targetId && !finished(it)).length
   const done = items.filter((it) => it.status === "done").length
+  const created = items.filter((it) => it.status === "created").length
+  const classificationLabel = (id: string) => { const c = allClassifications.find((x) => x.id === id); return c ? c.labels?.[0]?.value ?? c.name : id }
   const failed = items.filter((it) => it.status === "error").length
-  const busy = running || items.some((it) => it.status === "uploading" || it.status === "versioning")
+  const busy = running || creatingAll || items.some((it) => it.status === "uploading" || it.status === "versioning" || it.status === "creating")
   // Guided flow: each step unlocks when the one before it is complete. Step 1 always stays editable.
   const step1: StepState = targets.length ? "done" : "active"
   const step2: StepState = !targets.length ? "locked" : items.length ? "done" : "active"
-  const step3: StepState = !targets.length || !items.length ? "locked" : items.every((it) => it.status === "done" || !it.targetId) && done > 0 ? "done" : "active"
+  const step3: StepState = !targets.length || !items.length ? "locked" : items.every((it) => finished(it) || !it.targetId) && done + created > 0 ? "done" : "active"
   const damUrl = (recordId: string) => `https://${connection?.environment}.dam.aprimo.com/dam/contentitems/${recordId.replace(/-/g, "")}`
   // A record chosen by more than one local file would get several versions in a row; flag it.
   const targetUse = new Map<string, number>()
-  for (const it of items) if (it.targetId && it.status !== "done") targetUse.set(it.targetId, (targetUse.get(it.targetId) ?? 0) + 1)
+  for (const it of items) if (it.targetId && !finished(it)) targetUse.set(it.targetId, (targetUse.get(it.targetId) ?? 0) + 1)
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -364,8 +425,8 @@ export default function BulkVersioningPage() {
                   <ul className="max-h-40 overflow-y-auto divide-y divide-border">
                     {items.map((it) => {
                       const cand = it.candidates.find((c) => c.target.recordId === it.targetId)
-                      const tone = it.status === "done" ? "bg-green-600" : !cand ? "bg-muted-foreground/40" : cand.reason === "manual" || cand.score >= AUTO_MATCH_SCORE ? "bg-green-600" : cand.score >= 60 ? "bg-amber-500" : "bg-red-500"
-                      const note = it.status === "done" ? "versioned" : it.status === "error" ? "failed" : !targets.length ? "not matched yet" : cand ? (cand.reason === "manual" ? "manual" : `${cand.score}%`) : "no match"
+                      const tone = finished(it) ? "bg-green-600" : !cand ? "bg-muted-foreground/40" : cand.reason === "manual" || cand.score >= AUTO_MATCH_SCORE ? "bg-green-600" : cand.score >= 60 ? "bg-amber-500" : "bg-red-500"
+                      const note = it.status === "done" ? "versioned" : it.status === "created" ? "created" : it.status === "error" ? "failed" : !targets.length ? "not matched yet" : cand ? (cand.reason === "manual" ? "manual" : `${cand.score}%`) : "no match"
                       return (
                         <li key={it.uid} className="flex items-center gap-2 px-3 py-1 text-xs">
                           {it.previewUrl ? (
@@ -401,7 +462,7 @@ export default function BulkVersioningPage() {
             <Card className={`mb-6 scroll-mt-20 ${stepCardClass(step3)}`} id="bv-matches" aria-disabled={step3 === "locked"}>
               <CardHeader className="flex flex-row items-center justify-between space-y-0">
                 <CardTitle className="text-lg flex flex-wrap items-center gap-2">
-                  <StepMarker n={3} state={step3} /> Review and version {step3 === "locked" && <span className="text-xs font-normal text-muted-foreground">Load records in step 1 to match these files</span>}<span className="text-muted-foreground text-sm font-normal">{matched} matched{lowConfidence ? ` (${lowConfidence} low confidence)` : ""} · {unmatched} unmatched · {done} done{failed ? ` · ${failed} failed` : ""}</span>
+                  <StepMarker n={3} state={step3} /> Review and version {step3 === "locked" && <span className="text-xs font-normal text-muted-foreground">Load records in step 1 to match these files</span>}<span className="text-muted-foreground text-sm font-normal">{matched} matched{lowConfidence ? ` (${lowConfidence} low confidence)` : ""} · {unmatched} unmatched · {done} versioned{created ? ` · ${created} created` : ""}{failed ? ` · ${failed} failed` : ""}</span>
                 </CardTitle>
                 <div className="flex gap-2">
                   <Button variant="outline" size="sm" onClick={exportUnmatched} disabled={busy || exporting !== null || unmatched === 0} title="Zip the files that have no record, with a CSV manifest, for manual upload to the DAM">
@@ -429,6 +490,20 @@ export default function BulkVersioningPage() {
                   {filter !== "all" && (
                     <span className="ml-auto text-xs text-muted-foreground">Version all applies to the {visibleItems.length} row{visibleItems.length === 1 ? "" : "s"} shown</span>
                   )}
+                </div>
+                <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-border text-xs">
+                  <FilePlus2 className="w-3.5 h-3.5 text-muted-foreground" />
+                  <span className="text-muted-foreground">New records are created as drafts in</span>
+                  <Select value={createIn || "__none"} onValueChange={(v) => setCreateIn(v === "__none" ? "" : v)} disabled={busy}>
+                    <SelectTrigger className="h-7 text-xs w-auto max-w-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {classificationIds.map((id) => <SelectItem key={id} value={id} className="text-xs">{classificationLabel(id)}</SelectItem>)}
+                      <SelectItem value="__none" className="text-xs">No classification</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button variant={confirmCreate ? "default" : "outline"} size="sm" className="h-7 text-xs ml-auto" onClick={createUnmatched} disabled={busy || unmatched === 0} title="Upload every unmatched file as a new draft record">
+                    {creatingAll ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Creating…</> : confirmCreate ? <>Click again to create {unmatched} record{unmatched === 1 ? "" : "s"}</> : <><FilePlus2 className="w-3.5 h-3.5" /> Create {unmatched} unmatched as new records</>}
+                  </Button>
                 </div>
                 <Table>
                   <TableHeader>
@@ -463,7 +538,9 @@ export default function BulkVersioningPage() {
                             </div>
                           </TableCell>
                           <TableCell className="align-top">
-                            {it.status === "done" && chosen ? (
+                            {it.status === "created" && it.createdId ? (
+                              <a href={damUrl(it.createdId)} target="_blank" rel="noopener noreferrer" className="text-xs inline-flex items-center gap-1 hover:underline underline-offset-2">New draft record{createIn ? ` in ${classificationLabel(createIn)}` : ""} <ExternalLink className="w-3 h-3" /></a>
+                            ) : it.status === "done" && chosen ? (
                               <TargetLine target={chosen} href={damUrl(chosen.recordId)} hover={<ComparePreview item={it} target={chosen} />} />
                             ) : (
                               <div className="flex flex-col gap-1.5">
@@ -501,22 +578,28 @@ export default function BulkVersioningPage() {
                           </TableCell>
                           <TableCell className="align-top">
                             {it.status === "pending" && <span className="text-xs text-muted-foreground">{it.targetId ? "Ready" : "Skipped"}</span>}
-                            {(it.status === "uploading" || it.status === "versioning") && (
+                            {(it.status === "uploading" || it.status === "versioning" || it.status === "creating") && (
                               <div className="flex flex-col gap-1">
-                                <span className="text-xs flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> {it.status === "uploading" ? `Uploading ${it.progress}%` : "Adding version…"}</span>
+                                <span className="text-xs flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> {it.status === "uploading" ? `Uploading ${it.progress}%` : it.status === "creating" ? "Creating record…" : "Adding version…"}</span>
                                 <Progress value={it.progress} className="h-1" />
                               </div>
                             )}
                             {it.status === "done" && <span className="text-xs flex items-center gap-1 text-green-600"><CheckCircle2 className="w-3.5 h-3.5" /> New version added</span>}
+                            {it.status === "created" && <span className="text-xs flex items-center gap-1 text-green-600"><CheckCircle2 className="w-3.5 h-3.5" /> New record created</span>}
                             {it.status === "error" && <span className="text-xs flex items-start gap-1 text-destructive"><AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> {it.error}</span>}
                           </TableCell>
                           <TableCell className="align-top text-right">
-                            {it.status === "done" ? (
+                            {finished(it) ? (
                               <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => removeItems((p) => p.uid !== it.uid)}><X className="w-3.5 h-3.5" /></Button>
                             ) : (
-                              <Button size="sm" className="h-7 text-xs" onClick={() => versionOne(it)} disabled={!it.targetId || busy}>
-                                <Upload className="w-3.5 h-3.5" /> {it.status === "error" ? "Retry" : "Version"}
-                              </Button>
+                              <div className="flex flex-col items-end gap-1">
+                                <Button size="sm" className="h-7 text-xs" onClick={() => versionOne(it)} disabled={!it.targetId || busy}>
+                                  <Upload className="w-3.5 h-3.5" /> {it.status === "error" && it.targetId ? "Retry" : "Version"}
+                                </Button>
+                                <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px] text-muted-foreground" onClick={() => createOne(it)} disabled={busy} title={`Create a new draft record from this file${createIn ? ` in ${classificationLabel(createIn)}` : ""} instead of versioning`}>
+                                  <FilePlus2 className="w-3 h-3" /> New record
+                                </Button>
+                              </div>
                             )}
                           </TableCell>
                         </TableRow>
@@ -537,7 +620,7 @@ export default function BulkVersioningPage() {
           {/* Footer actions */}
           <div className="flex items-center justify-between pt-4 border-t border-border">
             <div className="text-xs text-muted-foreground">
-              {items.length} file{items.length === 1 ? "" : "s"} · {matched} matched{lowConfidence ? <span className="text-amber-600"> · {lowConfidence} below {AUTO_MATCH_SCORE}%, check before versioning</span> : null} · {done} versioned{failed ? ` · ${failed} failed` : ""}
+              {items.length} file{items.length === 1 ? "" : "s"} · {matched} matched{lowConfidence ? <span className="text-amber-600"> · {lowConfidence} below {AUTO_MATCH_SCORE}%, check before versioning</span> : null} · {done} versioned{created ? ` · ${created} created` : ""}{failed ? ` · ${failed} failed` : ""}
             </div>
             <Button onClick={versionAll} disabled={busy || versionableShown === 0 || step3 === "locked"}>
               {running ? <><Loader2 className="w-4 h-4 animate-spin" /> Versioning…</> : <><Layers className="w-4 h-4" /> {filter === "all" ? `Version all (${versionableShown})` : `Version ${versionableShown} shown`}</>}
@@ -593,18 +676,18 @@ const MATCH_FILTERS: Array<{ key: MatchFilter; label: string; dot?: string }> = 
   { key: "low", label: "Below 60%", dot: "bg-red-500" },
   { key: "manual", label: "Manual", dot: "bg-muted-foreground" },
   { key: "none", label: "No match", dot: "bg-muted-foreground/40" },
-  { key: "done", label: "Versioned", dot: "bg-green-600" },
+  { key: "done", label: "Done", dot: "bg-green-600" },
 ]
 
 function chosenCandidate(it: LocalItem): Candidate | undefined {
   return it.candidates.find((c) => c.target.recordId === it.targetId)
 }
 
-/** Which rows a filter shows. Score filters cover rows still to version; "Versioned" shows finished ones. */
+/** Which rows a filter shows. Score filters cover rows still to version; "Done" shows versioned and created ones. */
 function matchesFilter(it: LocalItem, f: MatchFilter): boolean {
   if (f === "all") return true
-  if (f === "done") return it.status === "done"
-  if (it.status === "done") return false
+  if (f === "done") return finished(it)
+  if (finished(it)) return false
   const c = chosenCandidate(it)
   if (f === "none") return !c
   if (!c) return false
@@ -617,7 +700,7 @@ function matchesFilter(it: LocalItem, f: MatchFilter): boolean {
 }
 
 function isVersionable(it: LocalItem): boolean {
-  return !!it.targetId && it.status !== "done" && it.status !== "uploading" && it.status !== "versioning"
+  return !!it.targetId && !finished(it) && it.status !== "uploading" && it.status !== "versioning" && it.status !== "creating"
 }
 
 type StepState = "active" | "done" | "locked"
