@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Expander } from "aprimo-js"
 import type { Record as AprimoSDKRecord, FileVersion } from "aprimo-js/model"
-import { Loader2, Upload, Layers, FolderOpen, FileIcon, CheckCircle2, AlertCircle, Trash2, ExternalLink, RefreshCw, X } from "lucide-react"
+import { Loader2, Upload, Layers, FolderOpen, FileIcon, CheckCircle2, AlertCircle, Trash2, ExternalLink, RefreshCw, X, PackageOpen } from "lucide-react"
 import { ClassificationTreePicker } from "@/components/classification-tree-picker"
 import { useAprimo } from "@/aprimo"
 import { Button } from "@/components/ui/button"
@@ -18,6 +18,7 @@ import { toast } from "sonner"
 import type { ClassificationNode } from "@/models"
 import { type VersionTarget, type Candidate, candidatesFor, AUTO_MATCH_SCORE, formatBytes } from "@/lib/bulk-versioning"
 import { type PickedFile, filesFromDrop, filesFromInput, isUsable } from "@/lib/dropped-files"
+import { buildUnmatchedZip, downloadBlob, exportFileName, type ExportEntry } from "@/lib/bulk-versioning-export"
 
 // Bulk Versioning: pick a classification, drop local files (or a folder), and
 // the tool finds the record in that classification whose master file has the
@@ -70,6 +71,7 @@ export default function BulkVersioningPage() {
   const [reading, setReading] = useState(false)
   const [running, setRunning] = useState(false)
   const [filter, setFilter] = useState<MatchFilter>("all")
+  const [exporting, setExporting] = useState<number | null>(null)
 
   useEffect(() => {
     if (!isConnected || !client) return
@@ -245,6 +247,36 @@ export default function BulkVersioningPage() {
     toast[ok === todo.length ? "success" : "warning"](`${ok} of ${todo.length} versioned`)
   }
 
+  // ── Export what could not be matched ───────────────────────────────────────
+  /** Files with no record chosen (no candidate, or deliberately skipped), zipped with a manifest for manual upload. */
+  async function exportUnmatched() {
+    const entries: ExportEntry[] = items
+      .filter((it) => !it.targetId && it.status !== "done")
+      .map((it) => {
+        const best = it.candidates[0]
+        return {
+          file: it.file,
+          relativePath: it.relativePath,
+          reason: !targets.length ? "records not loaded" : !it.candidates.length ? "no similar file name in the selected classifications" : "skipped: candidates offered but none chosen",
+          nearest: best ? { fileName: best.target.fileName, title: best.target.title, score: best.score, recordId: best.target.recordId } : null,
+        }
+      })
+    if (!entries.length) {
+      toast.message("Every file has a record; nothing to export")
+      return
+    }
+    setExporting(0)
+    try {
+      const blob = await buildUnmatchedZip(entries, { environment: connection?.environment ?? "", classifications: classificationIds }, (d, t) => setExporting(t ? Math.round((d / t) * 100) : 100))
+      downloadBlob(blob, exportFileName(connection?.environment ?? "aprimo"))
+      toast.success(`Exported ${entries.length} unmatched file${entries.length === 1 ? "" : "s"} with a manifest`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not build the zip")
+    } finally {
+      setExporting(null)
+    }
+  }
+
   // ── Derived ────────────────────────────────────────────────────────────────
   const visibleItems = items.filter((it) => matchesFilter(it, filter))
   const filterCounts = Object.fromEntries(MATCH_FILTERS.map((f) => [f.key, items.filter((it) => matchesFilter(it, f.key)).length])) as Record<MatchFilter, number>
@@ -372,6 +404,9 @@ export default function BulkVersioningPage() {
                   <StepMarker n={3} state={step3} /> Review and version {step3 === "locked" && <span className="text-xs font-normal text-muted-foreground">Load records in step 1 to match these files</span>}<span className="text-muted-foreground text-sm font-normal">{matched} matched{lowConfidence ? ` (${lowConfidence} low confidence)` : ""} · {unmatched} unmatched · {done} done{failed ? ` · ${failed} failed` : ""}</span>
                 </CardTitle>
                 <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={exportUnmatched} disabled={busy || exporting !== null || unmatched === 0} title="Zip the files that have no record, with a CSV manifest, for manual upload to the DAM">
+                    {exporting !== null ? <><Loader2 className="w-4 h-4 animate-spin" /> Zipping {exporting}%</> : <><PackageOpen className="w-4 h-4" /> Export unmatched ({unmatched})</>}
+                  </Button>
                   <Button variant="outline" size="sm" onClick={() => setItems((prev) => prev.map((it) => rematch(it, targets)))} disabled={busy || !targets.length}><RefreshCw className="w-4 h-4" /> Re-match</Button>
                   <Button variant="outline" size="sm" onClick={() => removeItems(() => false)} disabled={busy}><Trash2 className="w-4 h-4" /> Clear</Button>
                 </div>
