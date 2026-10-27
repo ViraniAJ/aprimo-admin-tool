@@ -6,6 +6,8 @@ export interface VersionTarget {
   title: string
   fileName: string
   fileId: string | null
+  /** Id of the master file's latest version; previews attach to it. */
+  versionId: string | null
   fileSize: number | null
   versionNumber: number | null
   modifiedOn: string | null

@@ -46,7 +46,10 @@ Select any field definition to see a visual graph of everywhere it is used — f
 ### Bulk Versioning
 Pick classifications from the tree (a parent includes all of its children), then drop updated files or a whole folder. Each local file is matched by name to the record whose master file has the same or a similar name, ignoring revision markers like `_v2` or `final`, sizes like `10x10`, and counters like `(002)`. Matches are colour-coded by confidence and can be filtered; records can also be picked manually. Hovering a row compares the current version in Aprimo with the proposed file. Version one row at a time, or everything in the current filter. Each file is uploaded and added as a new version of the record's master file; nothing is created or deleted.
 
-This tool is the desktop build of the Bulk Versioning page in [virani-editor-tools](https://github.com/ViraniAJ/aprimo-editor-tools). Its source lives in `bulk-versioning/src` (React + Tailwind, bundled by esbuild into `renderer/bulk-versioning.js` and `.css`) and runs as its own page so its styles never touch the other tools. The matching logic in `bulk-versioning/src/lib` is shared with the web version; keep the two in step when changing it.
+### Bulk Previews
+The same matching flow as Bulk Versioning, but each matched file is added as a **preview** on the record's current master file version; the master file itself is not changed. Useful for dropping a folder of rendered thumbnails or alternate previews onto existing records.
+
+Bulk Versioning and Bulk Previews are the desktop build of the Bulk Versioning page in [virani-editor-tools](https://github.com/ViraniAJ/aprimo-editor-tools). Its source lives in `bulk-versioning/src` (React + Tailwind, bundled by esbuild into `renderer/bulk-versioning.js` and `.css`) and runs as its own page so its styles never touch the other tools. The matching logic in `bulk-versioning/src/lib` is shared with the web version; keep the two in step when changing it.
 
 ## How auth works
 

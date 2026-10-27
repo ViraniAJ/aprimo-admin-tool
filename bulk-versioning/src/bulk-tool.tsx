@@ -21,11 +21,49 @@ import { type VersionTarget, type Candidate, candidatesFor, AUTO_MATCH_SCORE, fo
 import { type PickedFile, filesFromDrop, filesFromInput, isUsable } from "@/lib/dropped-files"
 import { buildUnmatchedZip, downloadBlob, exportFileName, type ExportEntry } from "@/lib/bulk-versioning-export"
 
-// Bulk Versioning: pick a classification, drop local files (or a folder), and
-// the tool finds the record in that classification whose master file has the
-// same or a similar name. Each match can be versioned on its own, or all
-// confirmed matches at once. The local file becomes a new version of the
-// record's master file; nothing is created and nothing is deleted.
+// Bulk Versioning and Bulk Previews share this component. Pick a
+// classification, drop local files (or a folder), and the tool finds the
+// record in that classification whose master file has the same or a similar
+// name. Each match can be applied on its own, or all confirmed matches at
+// once. In "version" mode the local file becomes a new version of the record's
+// master file; in "preview" mode it becomes a preview on the master file's
+// current version. Nothing is deleted.
+
+export type ToolMode = "version" | "preview"
+
+/** Mode-specific wording so the two tools read naturally. */
+const WORDING: Record<ToolMode, { title: string; intro: string; step1: string; step3: string; recordCol: string; verb: string; verbing: string; past: string; all: string; done: string; comment: string; commentHint: string; proposed: string }> = {
+  version: {
+    title: "Bulk Versioning",
+    intro: "Pick a classification, then drop the updated files. Each local file is matched to the record in that classification whose master file has the same or a similar name, and becomes a new version of it. Review the matches, then version them one at a time or all at once.",
+    step1: "Records to version",
+    step3: "Review and version",
+    recordCol: "Record to version",
+    verb: "Version",
+    verbing: "Versioning…",
+    past: "versioned",
+    all: "Version all",
+    done: "New version added",
+    comment: "Version comment",
+    commentHint: "Optional, stored on every new version",
+    proposed: "Proposed new version",
+  },
+  preview: {
+    title: "Bulk Previews",
+    intro: "Pick a classification, then drop the preview images. Each local file is matched to the record in that classification whose master file has the same or a similar name, and is added as a preview on that file's current version. The master file itself is not changed. Review the matches, then add previews one at a time or all at once.",
+    step1: "Records to add previews to",
+    step3: "Review and add previews",
+    recordCol: "Record to add the preview to",
+    verb: "Add preview",
+    verbing: "Adding previews…",
+    past: "preview added",
+    all: "Add all previews",
+    done: "Preview added",
+    comment: "Preview label",
+    commentHint: "Optional, shown on every preview added",
+    proposed: "Proposed preview",
+  },
+}
 
 type Status = "pending" | "uploading" | "versioning" | "done" | "creating" | "created" | "error"
 
@@ -63,7 +101,8 @@ function q(s: string) {
   return s.replace(/'/g, "''")
 }
 
-export default function BulkVersioningPage() {
+export function BulkTool({ mode }: { mode: ToolMode }) {
+  const T = WORDING[mode]
   const { client, isConnected, connection } = useAprimo()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
@@ -222,7 +261,11 @@ export default function BulkVersioningPage() {
     const target = item.candidates.find((c) => c.target.recordId === item.targetId)?.target
     if (!target) return false
     if (!target.fileId) {
-      update(item.uid, { status: "error", error: "Record has no master file id; cannot add a version" })
+      update(item.uid, { status: "error", error: "Record has no master file id" })
+      return false
+    }
+    if (mode === "preview" && !target.versionId) {
+      update(item.uid, { status: "error", error: "Record has no master file version to attach a preview to" })
       return false
     }
     try {
@@ -234,11 +277,21 @@ export default function BulkVersioningPage() {
       const token = (uploadResult.data as unknown as { token?: string } | undefined)?.token
       if (!uploadResult.ok || !token) throw new Error(uploadResult.error?.message ?? "Upload failed")
       update(item.uid, { status: "versioning", progress: 100 })
-      const version: { id: string; fileName: string; comment?: string } = { id: token, fileName: item.file.name }
-      if (comment.trim()) version.comment = comment.trim()
-      const r = await client.records.update(target.recordId, {
-        files: { addOrUpdate: [{ id: target.fileId, versions: { addOrUpdate: [version] } }] },
-      })
+      let r
+      if (mode === "preview") {
+        // Attach the upload as a preview on the existing latest version; the version itself is untouched.
+        const preview: { id: string; label?: string } = { id: token }
+        if (comment.trim()) preview.label = comment.trim()
+        r = await client.records.update(target.recordId, {
+          files: { addOrUpdate: [{ id: target.fileId, versions: { addOrUpdate: [{ id: target.versionId!, previews: { addOrUpdate: [preview] } }] } }] },
+        })
+      } else {
+        const version: { id: string; fileName: string; comment?: string } = { id: token, fileName: item.file.name }
+        if (comment.trim()) version.comment = comment.trim()
+        r = await client.records.update(target.recordId, {
+          files: { addOrUpdate: [{ id: target.fileId, versions: { addOrUpdate: [version] } }] },
+        })
+      }
       if (!r.ok) throw new Error(r.error?.message ?? "Record update failed")
       update(item.uid, { status: "done" })
       return true
@@ -252,14 +305,14 @@ export default function BulkVersioningPage() {
     // Only the rows the current filter shows.
     const todo = items.filter((it) => matchesFilter(it, filter) && isVersionable(it))
     if (!todo.length) {
-      toast.error(filter === "all" ? "No confirmed matches to version" : "No versionable rows in this filter")
+      toast.error(filter === "all" ? "No confirmed matches" : "No rows to apply in this filter")
       return
     }
     setRunning(true)
     let ok = 0
     for (const it of todo) if (await versionOne(it)) ok++
     setRunning(false)
-    toast[ok === todo.length ? "success" : "warning"](`${ok} of ${todo.length} versioned`)
+    toast[ok === todo.length ? "success" : "warning"](`${ok} of ${todo.length} ${T.past}`)
   }
 
   // ── Create as a new record instead of versioning ───────────────────────────
@@ -361,7 +414,7 @@ export default function BulkVersioningPage() {
       <main className="flex-1 w-full px-6 py-6">
         <div>
           <p className="text-muted-foreground mb-8 max-w-3xl">
-            Pick a classification, then drop the updated files. Each local file is matched to the record in that classification whose master file has the same or a similar name, and becomes a new version of it. Review the matches, then version them one at a time or all at once.
+            {T.intro}
           </p>
 
           {/* Steps 1 and 2 side by side on wide screens */}
@@ -369,7 +422,7 @@ export default function BulkVersioningPage() {
           {/* Step 1: scope */}
           <Card className={`flex flex-col ${stepCardClass(step1)}`}>
             <CardHeader>
-              <CardTitle className="text-lg flex items-center gap-2"><StepMarker n={1} state={step1} /> Records to version</CardTitle>
+              <CardTitle className="text-lg flex items-center gap-2"><StepMarker n={1} state={step1} /> {T.step1}</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
               <div className="space-y-1.5">
@@ -424,7 +477,7 @@ export default function BulkVersioningPage() {
                     {items.map((it) => {
                       const cand = it.candidates.find((c) => c.target.recordId === it.targetId)
                       const tone = finished(it) ? "bg-green-600" : !cand ? "bg-muted-foreground/40" : cand.reason === "manual" || cand.score >= AUTO_MATCH_SCORE ? "bg-green-600" : cand.score >= 60 ? "bg-amber-500" : "bg-red-500"
-                      const note = it.status === "done" ? "versioned" : it.status === "created" ? "created" : it.status === "error" ? "failed" : !targets.length ? "not matched yet" : cand ? (cand.reason === "manual" ? "manual" : `${cand.score}%`) : "no match"
+                      const note = it.status === "done" ? T.past : it.status === "created" ? "created" : it.status === "error" ? "failed" : !targets.length ? "not matched yet" : cand ? (cand.reason === "manual" ? "manual" : `${cand.score}%`) : "no match"
                       return (
                         <li key={it.uid} className="flex items-center gap-2 px-3 py-1 text-xs">
                           {it.previewUrl ? (
@@ -448,8 +501,8 @@ export default function BulkVersioningPage() {
                 </div>
               )}
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="version-comment" className="text-sm">Version comment</Label>
-                <Input id="version-comment" placeholder="Optional, stored on every new version" value={comment} onChange={(e) => setComment(e.target.value)} disabled={busy} />
+                <Label htmlFor="version-comment" className="text-sm">{T.comment}</Label>
+                <Input id="version-comment" placeholder={T.commentHint} value={comment} onChange={(e) => setComment(e.target.value)} disabled={busy} />
               </div>
             </CardContent>
           </Card>
@@ -460,7 +513,7 @@ export default function BulkVersioningPage() {
             <Card className={`mb-6 scroll-mt-20 ${stepCardClass(step3)}`} id="bv-matches" aria-disabled={step3 === "locked"}>
               <CardHeader className="flex flex-row items-center justify-between space-y-0">
                 <CardTitle className="text-lg flex flex-wrap items-center gap-2">
-                  <StepMarker n={3} state={step3} /> Review and version {step3 === "locked" && <span className="text-xs font-normal text-muted-foreground">Load records in step 1 to match these files</span>}<span className="text-muted-foreground text-sm font-normal">{matched} matched{lowConfidence ? ` (${lowConfidence} low confidence)` : ""} · {unmatched} unmatched · {done} versioned{created ? ` · ${created} created` : ""}{failed ? ` · ${failed} failed` : ""}</span>
+                  <StepMarker n={3} state={step3} /> {T.step3} {step3 === "locked" && <span className="text-xs font-normal text-muted-foreground">Load records in step 1 to match these files</span>}<span className="text-muted-foreground text-sm font-normal">{matched} matched{lowConfidence ? ` (${lowConfidence} low confidence)` : ""} · {unmatched} unmatched · {done} {T.past}{created ? ` · ${created} created` : ""}{failed ? ` · ${failed} failed` : ""}</span>
                 </CardTitle>
                 <div className="flex gap-2">
                   <Button variant="outline" size="sm" onClick={exportUnmatched} disabled={busy || exporting !== null || unmatched === 0} title="Zip the files that have no record, with a CSV manifest, for manual upload to the DAM">
@@ -486,10 +539,10 @@ export default function BulkVersioningPage() {
                     </button>
                   ))}
                   {filter !== "all" && (
-                    <span className="ml-auto text-xs text-muted-foreground">Version all applies to the {visibleItems.length} row{visibleItems.length === 1 ? "" : "s"} shown</span>
+                    <span className="ml-auto text-xs text-muted-foreground">{T.all} applies to the {visibleItems.length} row{visibleItems.length === 1 ? "" : "s"} shown</span>
                   )}
                 </div>
-                <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-border text-xs">
+                {mode === "version" && <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-border text-xs">
                   <FilePlus2 className="w-3.5 h-3.5 text-muted-foreground" />
                   <span className="text-muted-foreground">New records are created as drafts in</span>
                   <Select value={createIn || "__none"} onValueChange={(v) => setCreateIn(v === "__none" ? "" : v)} disabled={busy}>
@@ -502,7 +555,7 @@ export default function BulkVersioningPage() {
                   <Button variant="outline" size="sm" className="h-7 text-xs ml-auto" onClick={() => setConfirmCreate(true)} disabled={busy || unmatched === 0} title="Upload every unmatched file as a new draft record">
                     {creatingAll ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Creating…</> : <><FilePlus2 className="w-3.5 h-3.5" /> Create {unmatched} unmatched as new records</>}
                   </Button>
-                </div>
+                </div>}
                 <Dialog open={confirmCreate} onOpenChange={setConfirmCreate}>
                   <DialogContent>
                     <DialogHeader>
@@ -527,7 +580,7 @@ export default function BulkVersioningPage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Local file</TableHead>
-                      <TableHead>Record to version</TableHead>
+                      <TableHead>{T.recordCol}</TableHead>
                       <TableHead className="w-[110px]">Match</TableHead>
                       <TableHead className="w-[150px]">Status</TableHead>
                       <TableHead className="w-[120px] text-right">Action</TableHead>
@@ -548,7 +601,7 @@ export default function BulkVersioningPage() {
                         <TableRow key={it.uid}>
                           <TableCell className="align-top">
                             <div className="flex items-start gap-2 min-w-0">
-                              <Thumb src={it.previewUrl}><ComparePreview item={it} target={chosen ?? null} /></Thumb>
+                              <Thumb src={it.previewUrl}><ComparePreview item={it} target={chosen ?? null} proposedLabel={T.proposed} /></Thumb>
                               <div className="min-w-0">
                                 <div className="text-sm font-medium break-all">{it.file.name}</div>
                                 <div className="text-xs text-muted-foreground">{formatBytes(it.file.size)}{it.relativePath !== it.file.name ? ` · ${it.relativePath}` : ""}</div>
@@ -559,7 +612,7 @@ export default function BulkVersioningPage() {
                             {it.status === "created" && it.createdId ? (
                               <a href={damUrl(it.createdId)} target="_blank" rel="noopener noreferrer" className="text-xs inline-flex items-center gap-1 hover:underline underline-offset-2">New draft record{createIn ? ` in ${classificationLabel(createIn)}` : ""} <ExternalLink className="w-3 h-3" /></a>
                             ) : it.status === "done" && chosen ? (
-                              <TargetLine target={chosen} href={damUrl(chosen.recordId)} hover={<ComparePreview item={it} target={chosen} />} />
+                              <TargetLine target={chosen} href={damUrl(chosen.recordId)} hover={<ComparePreview item={it} target={chosen} proposedLabel={T.proposed} />} />
                             ) : (
                               <div className="flex flex-col gap-1.5">
                                 {it.candidates.length > 0 && (
@@ -575,7 +628,7 @@ export default function BulkVersioningPage() {
                                     </SelectContent>
                                   </Select>
                                 )}
-                                {chosen && <TargetLine target={chosen} href={damUrl(chosen.recordId)} hover={<ComparePreview item={it} target={chosen} />} />}
+                                {chosen && <TargetLine target={chosen} href={damUrl(chosen.recordId)} hover={<ComparePreview item={it} target={chosen} proposedLabel={T.proposed} />} />}
                                 {!it.candidates.length && <span className="text-xs text-muted-foreground">{targets.length ? "No similar file name in this classification." : "Load records to match."}</span>}
                                 {targets.length > 0 && it.search === undefined ? (
                                   <button onClick={() => update(it.uid, { search: "" })} className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground text-left w-fit" disabled={busy}>
@@ -584,7 +637,7 @@ export default function BulkVersioningPage() {
                                 ) : targets.length > 0 ? (
                                   <ManualSearch targets={targets} query={it.search ?? ""} onQuery={(v) => update(it.uid, { search: v })} onPick={(t) => pickManual(it.uid, t)} onClose={() => update(it.uid, { search: undefined })} />
                                 ) : null}
-                                {dup && <span className="text-[11px] text-amber-600">Another local file also targets this record; both would become versions.</span>}
+                                {dup && <span className="text-[11px] text-amber-600">Another local file also targets this record; {mode === "preview" ? "both would be added as previews" : "both would become versions"}.</span>}
                                 {sameSize && <span className="text-[11px] text-amber-600">Same name and size as the current version; it may already be up to date.</span>}
                               </div>
                             )}
@@ -602,7 +655,7 @@ export default function BulkVersioningPage() {
                                 <Progress value={it.progress} className="h-1" />
                               </div>
                             )}
-                            {it.status === "done" && <span className="text-xs flex items-center gap-1 text-green-600"><CheckCircle2 className="w-3.5 h-3.5" /> New version added</span>}
+                            {it.status === "done" && <span className="text-xs flex items-center gap-1 text-green-600"><CheckCircle2 className="w-3.5 h-3.5" /> {T.done}</span>}
                             {it.status === "created" && <span className="text-xs flex items-center gap-1 text-green-600"><CheckCircle2 className="w-3.5 h-3.5" /> New record created</span>}
                             {it.status === "error" && <span className="text-xs flex items-start gap-1 text-destructive"><AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> {it.error}</span>}
                           </TableCell>
@@ -612,11 +665,11 @@ export default function BulkVersioningPage() {
                             ) : (
                               <div className="flex flex-col items-end gap-1">
                                 <Button size="sm" className="h-7 text-xs" onClick={() => versionOne(it)} disabled={!it.targetId || busy}>
-                                  <Upload className="w-3.5 h-3.5" /> {it.status === "error" && it.targetId ? "Retry" : "Version"}
+                                  <Upload className="w-3.5 h-3.5" /> {it.status === "error" && it.targetId ? "Retry" : T.verb}
                                 </Button>
-                                <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px] text-muted-foreground" onClick={() => createOne(it)} disabled={busy} title={`Create a new draft record from this file${createIn ? ` in ${classificationLabel(createIn)}` : ""} instead of versioning`}>
+                                {mode === "version" && <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px] text-muted-foreground" onClick={() => createOne(it)} disabled={busy} title={`Create a new draft record from this file${createIn ? ` in ${classificationLabel(createIn)}` : ""} instead of versioning`}>
                                   <FilePlus2 className="w-3 h-3" /> New record
-                                </Button>
+                                </Button>}
                               </div>
                             )}
                           </TableCell>
@@ -630,7 +683,7 @@ export default function BulkVersioningPage() {
           ) : (
             <Card className={`mb-6 ${stepCardClass("locked")}`} aria-disabled>
               <CardHeader>
-                <CardTitle className="text-lg flex items-center gap-2"><StepMarker n={3} state="locked" /> Review and version <span className="text-xs font-normal text-muted-foreground">{targets.length ? "Add files in step 2 to see matches" : "Complete steps 1 and 2 first"}</span></CardTitle>
+                <CardTitle className="text-lg flex items-center gap-2"><StepMarker n={3} state="locked" /> {T.step3} <span className="text-xs font-normal text-muted-foreground">{targets.length ? "Add files in step 2 to see matches" : "Complete steps 1 and 2 first"}</span></CardTitle>
               </CardHeader>
             </Card>
           )}
@@ -638,10 +691,10 @@ export default function BulkVersioningPage() {
           {/* Footer actions */}
           <div className="flex items-center justify-between pt-4 border-t border-border">
             <div className="text-xs text-muted-foreground">
-              {items.length} file{items.length === 1 ? "" : "s"} · {matched} matched{lowConfidence ? <span className="text-amber-600"> · {lowConfidence} below {AUTO_MATCH_SCORE}%, check before versioning</span> : null} · {done} versioned{created ? ` · ${created} created` : ""}{failed ? ` · ${failed} failed` : ""}
+              {items.length} file{items.length === 1 ? "" : "s"} · {matched} matched{lowConfidence ? <span className="text-amber-600"> · {lowConfidence} below {AUTO_MATCH_SCORE}%, check before applying</span> : null} · {done} {T.past}{created ? ` · ${created} created` : ""}{failed ? ` · ${failed} failed` : ""}
             </div>
             <Button onClick={versionAll} disabled={busy || versionableShown === 0 || step3 === "locked"}>
-              {running ? <><Loader2 className="w-4 h-4 animate-spin" /> Versioning…</> : <><Layers className="w-4 h-4" /> {filter === "all" ? `Version all (${versionableShown})` : `Version ${versionableShown} shown`}</>}
+              {running ? <><Loader2 className="w-4 h-4 animate-spin" /> {T.verbing}</> : <><Layers className="w-4 h-4" /> {filter === "all" ? `${T.all} (${versionableShown})` : `${T.verb} ${versionableShown} shown`}</>}
             </Button>
           </div>
         </div>
@@ -756,7 +809,7 @@ function ConfidenceBadge({ score, manual, reason }: { score: number; manual: boo
 }
 
 /** Side-by-side of what is in Aprimo now and what would replace it. */
-function ComparePreview({ item, target }: { item: LocalItem; target: VersionTarget | null }) {
+function ComparePreview({ item, target, proposedLabel }: { item: LocalItem; target: VersionTarget | null; proposedLabel: string }) {
   const pane = (label: string, src: string | null, caption: string, tone: "current" | "proposed") => (
     <div className="flex flex-col gap-1.5 min-w-0 w-[280px]">
       <div className={`text-[11px] uppercase tracking-[0.12em] ${tone === "proposed" ? "text-primary" : "text-muted-foreground"}`}>{label}</div>
@@ -776,7 +829,7 @@ function ComparePreview({ item, target }: { item: LocalItem; target: VersionTarg
       {target
         ? pane("Current version in Aprimo", target.previewUrl ?? target.thumbnailUrl, `${target.fileName} · ${formatBytes(target.fileSize)}${target.versionNumber != null ? ` · v${target.versionNumber}` : ""}${target.modifiedOn ? ` · ${new Date(target.modifiedOn).toLocaleDateString()}` : ""}`, "current")
         : pane("Current version in Aprimo", null, "No record chosen yet", "current")}
-      {pane("Proposed new version", item.previewUrl, `${item.file.name} · ${formatBytes(item.file.size)} · ${new Date(item.file.lastModified).toLocaleDateString()} · local`, "proposed")}
+      {pane(proposedLabel, item.previewUrl, `${item.file.name} · ${formatBytes(item.file.size)} · ${new Date(item.file.lastModified).toLocaleDateString()} · local`, "proposed")}
     </div>
   )
 }
@@ -847,6 +900,7 @@ function toTarget(rec: RawRecord): VersionTarget {
     title: rec.title ?? "",
     fileName: v?.fileName ?? "",
     fileId: rec._embedded?.masterfile?.id ?? null,
+    versionId: v?.id ?? null,
     fileSize: v?.fileSize ?? null,
     versionNumber: v?.versionNumber ?? null,
     modifiedOn: v?.createdOn ?? rec.modifiedOn ?? null,

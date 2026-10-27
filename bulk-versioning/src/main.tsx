@@ -2,10 +2,14 @@ import { createRoot } from "react-dom/client"
 import { Toaster } from "sonner"
 import { ArrowLeft, LogOut } from "lucide-react"
 import { AprimoProvider, goHome } from "@/aprimo"
-import BulkVersioningPage from "@/page"
+import { BulkTool, type ToolMode } from "@/bulk-tool"
 
-// Entry point for renderer/bulk-versioning.html. Runs as its own page so its
-// Tailwind styles never touch the other tools in index.html.
+// Entry point for renderer/bulk-versioning.html, which serves both Bulk
+// Versioning and (with ?mode=preview) Bulk Previews. Runs as its own page so
+// its Tailwind styles never touch the other tools in index.html.
+
+const MODE: ToolMode = new URLSearchParams(window.location.search).get("mode") === "preview" ? "preview" : "version"
+const TITLE = MODE === "preview" ? "Bulk Previews" : "Bulk Versioning"
 
 function followSystemTheme() {
   const mq = window.matchMedia("(prefers-color-scheme: dark)")
@@ -21,7 +25,7 @@ function Header({ environment, autoRefresh }: { environment: string; autoRefresh
         <button onClick={goHome} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-sm hover:bg-muted transition-colors">
           <ArrowLeft className="h-3.5 w-3.5" /> Home
         </button>
-        <h1 className="text-base font-bold">Bulk Versioning</h1>
+        <h1 className="text-base font-bold">{TITLE}</h1>
       </div>
       <div className="flex items-center gap-3 text-xs text-muted-foreground">
         <span>{environment}{autoRefresh ? " · auto-refresh" : ""}</span>
@@ -40,6 +44,7 @@ function Header({ environment, autoRefresh }: { environment: string; autoRefresh
 }
 
 async function boot() {
+  document.title = `${TITLE} · Aprimo Admin Tools`
   followSystemTheme()
   // A file dropped outside the drop zone would otherwise replace the page.
   window.addEventListener("dragover", (e) => e.preventDefault())
@@ -49,7 +54,7 @@ async function boot() {
   createRoot(document.getElementById("root")!).render(
     <AprimoProvider environment={session.environment}>
       <Header environment={session.environment} autoRefresh={session.hasRefreshToken} />
-      <BulkVersioningPage />
+      <BulkTool mode={MODE} />
       <Toaster richColors position="bottom-right" theme="system" />
     </AprimoProvider>,
   )
