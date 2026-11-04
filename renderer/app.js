@@ -449,6 +449,7 @@ async function init() {
   // Bulk Versioning is its own page (React + Tailwind, built from bulk-versioning/src).
   $("tileBulkVersioning").onclick = () => { window.location.href = "bulk-versioning.html" }
   $("tileBulkPreviews").onclick = () => { window.location.href = "bulk-versioning.html?mode=preview" }
+  $("tileRenditionCleanup").onclick = () => { window.location.href = "bulk-versioning.html?tool=cleanup" }
 
   // Classifications tool controls
   $("reloadBtn").onclick = () => load()

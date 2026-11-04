@@ -3,13 +3,17 @@ import { Toaster } from "sonner"
 import { ArrowLeft, LogOut } from "lucide-react"
 import { AprimoProvider, goHome } from "@/aprimo"
 import { BulkTool, type ToolMode } from "@/bulk-tool"
+import { RenditionCleanupPage } from "@/rendition-cleanup"
 
 // Entry point for renderer/bulk-versioning.html, which serves both Bulk
 // Versioning and (with ?mode=preview) Bulk Previews. Runs as its own page so
 // its Tailwind styles never touch the other tools in index.html.
 
-const MODE: ToolMode = new URLSearchParams(window.location.search).get("mode") === "preview" ? "preview" : "version"
-const TITLE = MODE === "preview" ? "Bulk Previews" : "Bulk Versioning"
+// One bundle serves three tools: ?tool=cleanup → Rendition Cleanup, ?mode=preview → Bulk Previews, else Bulk Versioning.
+const PARAMS = new URLSearchParams(window.location.search)
+const TOOL: "cleanup" | "bulk" = PARAMS.get("tool") === "cleanup" ? "cleanup" : "bulk"
+const MODE: ToolMode = PARAMS.get("mode") === "preview" ? "preview" : "version"
+const TITLE = TOOL === "cleanup" ? "Rendition Cleanup" : MODE === "preview" ? "Bulk Previews" : "Bulk Versioning"
 
 function followSystemTheme() {
   const mq = window.matchMedia("(prefers-color-scheme: dark)")
@@ -54,7 +58,7 @@ async function boot() {
   createRoot(document.getElementById("root")!).render(
     <AprimoProvider environment={session.environment}>
       <Header environment={session.environment} autoRefresh={session.hasRefreshToken} />
-      <BulkTool mode={MODE} />
+      {TOOL === "cleanup" ? <RenditionCleanupPage /> : <BulkTool mode={MODE} />}
       <Toaster richColors position="bottom-right" theme="system" />
     </AprimoProvider>,
   )

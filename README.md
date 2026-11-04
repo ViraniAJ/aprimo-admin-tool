@@ -49,7 +49,10 @@ Pick classifications from the tree (a parent includes all of its children), then
 ### Bulk Previews
 The same matching flow as Bulk Versioning, but each matched file is added as a **preview** on the record's current master file version; the master file itself is not changed. Useful for dropping a folder of rendered thumbnails or alternate previews onto existing records.
 
-Bulk Versioning and Bulk Previews are the desktop build of the Bulk Versioning page in [virani-editor-tools](https://github.com/ViraniAJ/aprimo-editor-tools). Its source lives in `bulk-versioning/src` (React + Tailwind, bundled by esbuild into `renderer/bulk-versioning.js` and `.css`) and runs as its own page so its styles never touch the other tools. The matching logic in `bulk-versioning/src/lib` is shared with the web version; keep the two in step when changing it.
+### Rendition Cleanup
+Pick a collection, scan every record's master file latest version, and remove renditions, crops, trims or other additional files in bulk, filtered by type, label, format and origin. Files with public links are hidden by default; a confirmation dialog states counts, size and records before anything is removed. Master files and versions are never touched. Exports CSVs of the shown list, the selection and the outcome log.
+
+Bulk Versioning, Bulk Previews and Rendition Cleanup are the desktop build of the corresponding pages in [virani-editor-tools](https://github.com/ViraniAJ/aprimo-editor-tools). Its source lives in `bulk-versioning/src` (React + Tailwind, bundled by esbuild into `renderer/bulk-versioning.js` and `.css`) and runs as its own page so its styles never touch the other tools. The matching logic in `bulk-versioning/src/lib` is shared with the web version; keep the two in step when changing it.
 
 ## How auth works
 
