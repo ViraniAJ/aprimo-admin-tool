@@ -66,7 +66,11 @@ export async function collectionRecordIds(client: AprimoClient, collectionId: st
   if (!r.ok) throw new Error(r.error?.message ?? "Could not read the collection")
   const col = r.data as unknown as { type?: string; searchExpression?: unknown; _embedded?: { records?: { items?: Array<{ id: string }> } } }
   const embedded = col._embedded?.records?.items ?? []
-  if (embedded.length) return { ids: embedded.slice(0, limit).map((x) => x.id), capped: embedded.length > limit }
+  const uniq = (xs: string[]) => Array.from(new Set(xs))
+  if (embedded.length) {
+    const ids = uniq(embedded.map((x) => x.id))
+    return { ids: ids.slice(0, limit), capped: ids.length > limit }
+  }
   if (col.type === "Dynamic" && col.searchExpression) {
     const ids: string[] = []
     for (let page = 1; ids.length < limit; page++) {
@@ -76,7 +80,9 @@ export async function collectionRecordIds(client: AprimoClient, collectionId: st
       ids.push(...items.map((x) => x.id))
       if (items.length < 200) break
     }
-    return { ids: ids.slice(0, limit), capped: ids.length > limit }
+    // Search pages are not guaranteed stable between calls; drop any id seen twice.
+    const u = uniq(ids)
+    return { ids: u.slice(0, limit), capped: u.length > limit }
   }
   return { ids: [], capped: false }
 }
@@ -109,13 +115,26 @@ interface RawRecord {
   }
 }
 
+export class ScanError extends Error {
+  constructor(message: string, public status: number) {
+    super(message)
+  }
+}
+
+/** Rate limits and transient server errors are worth retrying; 403/404 are not. */
+export function isRetryable(e: unknown): boolean {
+  const status = e instanceof ScanError ? e.status : 0
+  const msg = e instanceof Error ? e.message : String(e)
+  return status === 429 || status === 0 || status >= 500 || /429|rate|too many|timeout|network|fetch/i.test(msg)
+}
+
 /** One record's master version with its additional files and which of them carry public links. */
 export async function scanRecord(client: AprimoClient, recordId: string): Promise<RecordScan> {
   const expander = Expander.create()
     .for<AprimoSDKRecord>("Record").expand("masterfile", "masterfilelatestversion")
     .for<FileVersion>("FileVersion").expand("additionalfiles", "publiclinks", "thumbnail")
   const r = await client.records.getById(recordId, expander)
-  if (!r.ok) return { recordId, title: "", masterFileName: "", fileId: null, versionId: null, thumbnailUrl: null, files: [], error: r.error?.message ?? "Could not read record" }
+  if (!r.ok) throw new ScanError(r.error?.message ?? "Could not read record", r.status)
   const rec = r.data as unknown as RawRecord
   const v = rec._embedded?.masterfilelatestversion
   const fileId = rec._embedded?.masterfile?.id ?? null
@@ -144,28 +163,48 @@ export async function scanRecord(client: AprimoClient, recordId: string): Promis
   return { ...base, files }
 }
 
-/** Runs tasks with a concurrency cap and simple retry on rate limiting. */
-export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>, onEach?: (done: number) => void): Promise<R[]> {
+/**
+ * Runs tasks with a concurrency cap. Retryable failures (rate limits, 5xx,
+ * network) back off and retry up to `retries` times, with every worker
+ * pausing together after a 429 so the burst subsides. A task that still
+ * fails is passed to `onError`, whose return value stands in for the result,
+ * so one bad record never aborts the whole run.
+ */
+export async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+  onEach?: (done: number) => void,
+  onError?: (item: T, error: unknown) => R,
+  retries = 6,
+): Promise<R[]> {
   const out: R[] = new Array(items.length)
   let next = 0
   let done = 0
+  let pauseUntil = 0
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
   async function worker() {
     for (;;) {
       const i = next++
       if (i >= items.length) return
       let attempt = 0
       for (;;) {
+        const wait = pauseUntil - Date.now()
+        if (wait > 0) await sleep(wait)
         try {
           out[i] = await fn(items[i], i)
           break
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e)
-          if (attempt < 4 && /429|rate|too many/i.test(msg)) {
+          if (attempt < retries && isRetryable(e)) {
             attempt++
-            await new Promise((r) => setTimeout(r, 1500 * attempt))
+            const backoff = Math.min(15_000, 1000 * 2 ** (attempt - 1)) + Math.random() * 400
+            if (e instanceof ScanError && e.status === 429) pauseUntil = Math.max(pauseUntil, Date.now() + backoff)
+            await sleep(backoff)
             continue
           }
-          throw e
+          if (!onError) throw e
+          out[i] = onError(items[i], e)
+          break
         }
       }
       done++
@@ -174,6 +213,10 @@ export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, in
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
   return out
+}
+
+export function failedScan(recordId: string, e: unknown): RecordScan {
+  return { recordId, title: "", masterFileName: "", fileId: null, versionId: null, thumbnailUrl: null, files: [], error: e instanceof Error ? e.message : String(e) }
 }
 
 /** Removes the given additional files from one record's master file version in a single update. */

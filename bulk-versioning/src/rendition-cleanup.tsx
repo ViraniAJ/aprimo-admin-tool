@@ -11,7 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { toast } from "sonner"
 import { formatBytes } from "@/lib/bulk-versioning"
-import { type CollectionInfo, type ExtraFile, type RecordScan, listCollections, collectionRecordIds, scanRecord, mapLimit, removeAdditionalFiles, filesToCsv, downloadText } from "@/lib/rendition-cleanup"
+import { type CollectionInfo, type ExtraFile, type RecordScan, listCollections, collectionRecordIds, scanRecord, mapLimit, failedScan, removeAdditionalFiles, filesToCsv, downloadText } from "@/lib/rendition-cleanup"
 
 // Rendition Cleanup: pick a collection, scan the master file's latest version
 // of every record in it, filter the additional files (renditions, crops,
@@ -93,14 +93,35 @@ export function RenditionCleanupPage() {
         return
       }
       setScanning({ done: 0, total: ids.length })
-      const results = await mapLimit(ids, 4, (id) => scanRecord(client, id), (done) => setScanning({ done, total: ids.length }))
+      const results = await mapLimit(ids, 3, (id) => scanRecord(client, id), (done) => setScanning({ done, total: ids.length }), failedScan)
       setScans(results)
-      const files = results.reduce((a, r) => a + r.files.length, 0)
-      const failed = results.filter((r) => r.error).length
-      setScanNote(`${results.length} record${results.length === 1 ? "" : "s"} scanned · ${files} additional file${files === 1 ? "" : "s"} found${failed ? ` · ${failed} record${failed === 1 ? "" : "s"} could not be read` : ""}${capped ? " · stopped at 5000 records" : ""}`)
+      describe(results, capped)
     } catch (e) {
       setScanNote(e instanceof Error ? e.message : "Scan failed")
       setScans([])
+    } finally {
+      setScanning(null)
+    }
+  }
+
+  function describe(results: RecordScan[], capped = false) {
+    const files = results.reduce((a, r) => a + r.files.length, 0)
+    const failed = results.filter((r) => r.error).length
+    setScanNote(`${results.length} record${results.length === 1 ? "" : "s"} in the collection · ${results.length - failed} read · ${files} additional file${files === 1 ? "" : "s"} found${failed ? ` · ${failed} could not be read (retry below)` : ""}${capped ? " · stopped at 5000 records" : ""}`)
+  }
+
+  /** Re-reads only the records that failed last time and merges them in. */
+  async function retryFailed() {
+    if (!client || !scans) return
+    const failedIds = scans.filter((r) => r.error).map((r) => r.recordId)
+    if (!failedIds.length) return
+    setScanning({ done: 0, total: failedIds.length })
+    try {
+      const redo = await mapLimit(failedIds, 2, (id) => scanRecord(client, id), (done) => setScanning({ done, total: failedIds.length }), failedScan)
+      const byId = new Map(redo.map((r) => [r.recordId, r]))
+      const merged = scans.map((r) => byId.get(r.recordId) ?? r)
+      setScans(merged)
+      describe(merged)
     } finally {
       setScanning(null)
     }
@@ -282,6 +303,12 @@ export function RenditionCleanupPage() {
                 </div>
                 {scanning && scanning.total > 0 && <Progress value={(scanning.done / scanning.total) * 100} className="h-1" />}
                 {scanNote && <p className="text-xs text-muted-foreground">{scanNote}</p>}
+                {scans && scans.some((r) => r.error) && (
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" size="sm" onClick={retryFailed} disabled={busy}><RefreshCw className="w-4 h-4" /> Retry {scans.filter((r) => r.error).length} failed</Button>
+                    <span className="text-xs text-amber-600">Those records are missing from the list below until they are read.</span>
+                  </div>
+                )}
                 {scans && scans.some((r) => r.error) && (
                   <details className="text-xs text-muted-foreground">
                     <summary className="cursor-pointer">Records that could not be read</summary>
