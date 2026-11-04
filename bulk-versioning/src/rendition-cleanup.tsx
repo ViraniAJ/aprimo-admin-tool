@@ -11,7 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { toast } from "sonner"
 import { formatBytes } from "@/lib/bulk-versioning"
-import { type CollectionInfo, type ExtraFile, type RecordScan, listCollections, collectionRecordIds, scanRecord, mapLimit, failedScan, removeAdditionalFiles, filesToCsv, downloadText } from "@/lib/rendition-cleanup"
+import { type CollectionInfo, type ExtraFile, type RecordScan, listCollections, collectionRecordIds, scanRecord, scanRecords, mapLimit, failedScan, removeAdditionalFiles, filesToCsv, downloadText } from "@/lib/rendition-cleanup"
 
 // Rendition Cleanup: pick a collection, scan the master file's latest version
 // of every record in it, filter the additional files (renditions, crops,
@@ -93,7 +93,7 @@ export function RenditionCleanupPage() {
         return
       }
       setScanning({ done: 0, total: ids.length })
-      const results = await mapLimit(ids, 3, (id) => scanRecord(client, id), (done) => setScanning({ done, total: ids.length }), failedScan)
+      const results = await scanRecords(client, ids, (done, total) => setScanning({ done, total }))
       setScans(results)
       describe(results, capped)
     } catch (e) {
@@ -117,7 +117,9 @@ export function RenditionCleanupPage() {
     if (!failedIds.length) return
     setScanning({ done: 0, total: failedIds.length })
     try {
-      const redo = await mapLimit(failedIds, 2, (id) => scanRecord(client, id), (done) => setScanning({ done, total: failedIds.length }), failedScan)
+      const redo = failedIds.length > 5
+        ? await scanRecords(client, failedIds, (done, total) => setScanning({ done, total }))
+        : await mapLimit(failedIds, 2, (id) => scanRecord(client, id), (done) => setScanning({ done, total: failedIds.length }), failedScan)
       const byId = new Map(redo.map((r) => [r.recordId, r]))
       const merged = scans.map((r) => byId.get(r.recordId) ?? r)
       setScans(merged)
@@ -294,7 +296,7 @@ export function RenditionCleanupPage() {
             <Card className={`flex flex-col ${stepCardClass(step2)}`} aria-disabled={step2 === "locked"}>
               <CardHeader><CardTitle className="text-lg flex items-center gap-2"><StepMarker n={2} state={step2} /> Scan records{step2 === "locked" && <span className="text-xs font-normal text-muted-foreground">Pick a collection first</span>}</CardTitle></CardHeader>
               <CardContent className="flex flex-col gap-3 flex-1">
-                <p className="text-sm text-muted-foreground">Reads every record in the collection and lists the additional files on its master file&apos;s latest version, with their type, label, size and whether a public link points at them. Nothing is changed.</p>
+                <p className="text-sm text-muted-foreground">Reads the records in the collection in batches per request and lists the additional files on each master file&apos;s latest version, with type, label, size and whether a public link points at them. Nothing is changed.</p>
                 <div className="flex items-center gap-3">
                   <Button onClick={scan} disabled={!collection || busy}>
                     {scanning ? <><Loader2 className="w-4 h-4 animate-spin" /> Scanning…</> : <><RefreshCw className="w-4 h-4" /> {scans ? "Rescan" : "Scan collection"}</>}

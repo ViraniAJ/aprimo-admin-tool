@@ -128,14 +128,59 @@ export function isRetryable(e: unknown): boolean {
   return status === 429 || status === 0 || status >= 500 || /429|rate|too many|timeout|network|fetch/i.test(msg)
 }
 
-/** One record's master version with its additional files and which of them carry public links. */
-export async function scanRecord(client: AprimoClient, recordId: string): Promise<RecordScan> {
-  const expander = Expander.create()
+const SCAN_EXPANDER = () =>
+  Expander.create()
     .for<AprimoSDKRecord>("Record").expand("masterfile", "masterfilelatestversion")
     .for<FileVersion>("FileVersion").expand("additionalfiles", "publiclinks", "thumbnail")
-  const r = await client.records.getById(recordId, expander)
+
+/** How many record ids go into one search request. Keeps the expression short and the response a sane size. */
+export const SCAN_BATCH = 40
+
+/**
+ * Scans many records with far fewer requests: one search per batch of ids,
+ * carrying the same expansions as a single-record read. Ids the search does
+ * not return (no permission, deleted) fall back to a per-record read so the
+ * error is specific. `onProgress` reports records accounted for so far.
+ */
+export async function scanRecords(client: AprimoClient, ids: string[], onProgress?: (done: number, total: number) => void): Promise<RecordScan[]> {
+  const byId = new Map<string, RecordScan>()
+  const batches: string[][] = []
+  for (let i = 0; i < ids.length; i += SCAN_BATCH) batches.push(ids.slice(i, i + SCAN_BATCH))
+  let done = 0
+  await mapLimit(
+    batches,
+    2,
+    async (batch) => {
+      const expression = batch.map((id) => `Id = '${id}'`).join(" OR ")
+      const r = await client.search.records({ searchExpression: { expression }, page: 1, pageSize: SCAN_BATCH }, SCAN_EXPANDER())
+      if (!r.ok) throw new ScanError(r.error?.message ?? "Search failed", r.status)
+      for (const rec of ((r.data as unknown as { items?: RawRecord[] })?.items ?? [])) byId.set(rec.id.toLowerCase(), toScan(rec))
+      done += batch.length
+      onProgress?.(Math.min(done, ids.length), ids.length)
+      return null
+    },
+    undefined,
+    () => null,
+  )
+  // Anything the batches missed gets an individual read, which also yields a precise error.
+  const missing = ids.filter((id) => !byId.has(id.toLowerCase()))
+  if (missing.length) {
+    const singles = await mapLimit(missing, 2, (id) => scanRecord(client, id), undefined, failedScan)
+    for (const sc of singles) byId.set(sc.recordId.toLowerCase(), sc)
+  }
+  onProgress?.(ids.length, ids.length)
+  return ids.map((id) => byId.get(id.toLowerCase()) ?? failedScan(id, new Error("Not returned by search")))
+}
+
+/** One record's master version with its additional files and which of them carry public links. */
+export async function scanRecord(client: AprimoClient, recordId: string): Promise<RecordScan> {
+  const r = await client.records.getById(recordId, SCAN_EXPANDER())
   if (!r.ok) throw new ScanError(r.error?.message ?? "Could not read record", r.status)
-  const rec = r.data as unknown as RawRecord
+  return toScan(r.data as unknown as RawRecord)
+}
+
+function toScan(rec: RawRecord): RecordScan {
+  const recordId = rec.id
   const v = rec._embedded?.masterfilelatestversion
   const fileId = rec._embedded?.masterfile?.id ?? null
   const versionId = v?.id ?? null
