@@ -105,9 +105,12 @@ export function RenditionCleanupPage() {
   }
 
   function describe(results: RecordScan[], capped = false) {
-    const files = results.reduce((a, r) => a + r.files.length, 0)
+    const all = results.flatMap((r) => r.files)
     const failed = results.filter((r) => r.error).length
-    setScanNote(`${results.length} record${results.length === 1 ? "" : "s"} in the collection · ${results.length - failed} read · ${files} additional file${files === 1 ? "" : "s"} found${failed ? ` · ${failed} could not be read (retry below)` : ""}${capped ? " · stopped at 5000 records" : ""}`)
+    const byType = new Map<string, number>()
+    for (const f of all) byType.set(f.type, (byType.get(f.type) ?? 0) + 1)
+    const breakdown = Array.from(byType.entries()).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${n} ${(TYPE_LABEL[t] ?? t).toLowerCase()}${n === 1 ? "" : "s"}`).join(", ")
+    setScanNote(`${results.length} record${results.length === 1 ? "" : "s"} in the collection · ${results.length - failed} read · ${all.length} additional file${all.length === 1 ? "" : "s"}${breakdown ? ` (${breakdown})` : ""}${failed ? ` · ${failed} could not be read (retry below)` : ""}${capped ? " · stopped at 5000 records" : ""}`)
   }
 
   /** Re-reads only the records that failed last time and merges them in. */
@@ -333,7 +336,10 @@ export function RenditionCleanupPage() {
               </CardHeader>
               <CardContent className="p-0">
                 <div className="flex flex-col gap-2 px-4 py-3 border-y border-border bg-muted/30 text-xs">
-                  <FacetRow label="Type" items={typeFacet.map(([k, n]) => [k, n, TYPE_LABEL[k] ?? k] as const)} active={typeFilter} onToggle={(k) => toggleFacet(typeFilter, setTypeFilter, k)} disabled={busy} />
+                  <FacetRow label="Type" items={typeFacet.map(([k, n]) => [k, n, TYPE_LABEL[k] ?? k] as const)} active={typeFilter} onToggle={(k) => toggleFacet(typeFilter, setTypeFilter, k)} onClear={() => setTypeFilter(new Set())} allLabel="All types" disabled={busy} />
+                  {typeFilter.size > 0 && typeFacet.length > typeFilter.size && (
+                    <p className="text-[11px] text-muted-foreground pl-14">Showing {Array.from(typeFilter).map((t) => (TYPE_LABEL[t] ?? t).toLowerCase() + "s").join(" and ")} only. Click a type to add it, or All types to see crops, trims and other additional files too.</p>
+                  )}
                   <FacetRow label="Label" items={labelFacet.map(([k, n]) => [k, n, k] as const)} active={labelFilter} onToggle={(k) => toggleFacet(labelFilter, setLabelFilter, k)} disabled={busy} />
                   <FacetRow label="Format" items={extFacet.map(([k, n]) => [k, n, k] as const)} active={extFilter} onToggle={(k) => toggleFacet(extFilter, setExtFilter, k)} disabled={busy} />
                   <div className="flex flex-wrap items-center gap-2">
@@ -446,11 +452,17 @@ export function RenditionCleanupPage() {
   )
 }
 
-function FacetRow({ label, items, active, onToggle, disabled }: { label: string; items: ReadonlyArray<readonly [string, number, string]>; active: Set<string>; onToggle: (k: string) => void; disabled?: boolean }) {
+function FacetRow({ label, items, active, onToggle, onClear, allLabel, disabled }: { label: string; items: ReadonlyArray<readonly [string, number, string]>; active: Set<string>; onToggle: (k: string) => void; onClear?: () => void; allLabel?: string; disabled?: boolean }) {
   if (!items.length) return null
+  const total = items.reduce((a, [, n]) => a + n, 0)
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       <span className="text-muted-foreground w-12">{label}</span>
+      {allLabel && (
+        <button onClick={onClear} disabled={disabled} className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-colors ${active.size === 0 ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border hover:bg-muted"}`}>
+          {allLabel}<span className={`tabular-nums ${active.size === 0 ? "opacity-80" : "text-muted-foreground"}`}>{total}</span>
+        </button>
+      )}
       {items.slice(0, 24).map(([k, n, text]) => (
         <button key={k} onClick={() => onToggle(k)} disabled={disabled} className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-colors ${active.has(k) ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border hover:bg-muted"}`}>
           {text}<span className={`tabular-nums ${active.has(k) ? "opacity-80" : "text-muted-foreground"}`}>{n}</span>
