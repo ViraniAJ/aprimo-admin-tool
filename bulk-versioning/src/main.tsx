@@ -13,7 +13,7 @@ import { RenditionCleanupPage } from "@/rendition-cleanup"
 const PARAMS = new URLSearchParams(window.location.search)
 const TOOL: "cleanup" | "bulk" = PARAMS.get("tool") === "cleanup" ? "cleanup" : "bulk"
 const MODE: ToolMode = PARAMS.get("mode") === "preview" ? "preview" : "version"
-const TITLE = TOOL === "cleanup" ? "Rendition Cleanup" : MODE === "preview" ? "Bulk Previews" : "Bulk Versioning"
+const TITLE = TOOL === "cleanup" ? "Additional File Cleanup" : MODE === "preview" ? "Bulk Previews" : "Bulk Versioning"
 
 function followSystemTheme() {
   const mq = window.matchMedia("(prefers-color-scheme: dark)")

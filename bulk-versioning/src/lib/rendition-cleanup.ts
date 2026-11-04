@@ -4,7 +4,7 @@ import { Expander } from "aprimo-js"
 import type { Record as AprimoSDKRecord, FileVersion, Collection } from "aprimo-js/model"
 import type { createClient } from "aprimo-js"
 
-// Rendition Cleanup: list the additional files (renditions, crops, trims…) on
+// Additional File Cleanup: list the additional files (renditions, crops, trims…) on
 // the master file's latest version of every record in a collection, and
 // remove the chosen ones with one record update per record.
 
@@ -280,7 +280,7 @@ export function csvEscape(v: unknown): string {
 export function filesToCsv(files: ExtraFile[], environment: string, collectionName: string, outcome?: Map<string, string>): string {
   const header = ["record_id", "record_title", "master_file", "additional_file_id", "label", "file_name", "extension", "size_bytes", "type", "purposes", "manual", "tag", "public_links", ...(outcome ? ["outcome"] : [])]
   const rows = files.map((f) => [f.recordId, f.recordTitle, f.masterFileName, f.id, f.label, f.fileName, f.extension, f.fileSize, f.type, f.purposes.join("|"), f.isManual ? "yes" : "no", f.tag, f.publicLinks, ...(outcome ? [outcome.get(f.id) ?? ""] : [])])
-  return [`# Rendition Cleanup · ${environment} · collection: ${collectionName} · ${new Date().toISOString()}`, header.join(","), ...rows.map((r) => r.map(csvEscape).join(","))].join("\r\n") + "\r\n"
+  return [`# Additional File Cleanup · ${environment} · collection: ${collectionName} · ${new Date().toISOString()}`, header.join(","), ...rows.map((r) => r.map(csvEscape).join(","))].join("\r\n") + "\r\n"
 }
 
 export function downloadText(text: string, filename: string, type = "text/csv") {

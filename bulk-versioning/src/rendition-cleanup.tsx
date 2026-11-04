@@ -13,7 +13,7 @@ import { toast } from "sonner"
 import { formatBytes } from "@/lib/bulk-versioning"
 import { type CollectionInfo, type ExtraFile, type RecordScan, listCollections, collectionRecordIds, scanRecord, scanRecords, mapLimit, failedScan, removeAdditionalFiles, filesToCsv, downloadText } from "@/lib/rendition-cleanup"
 
-// Rendition Cleanup: pick a collection, scan the master file's latest version
+// Additional File Cleanup: pick a collection, scan the master file's latest version
 // of every record in it, filter the additional files (renditions, crops,
 // trims…) and remove the selected ones. Nothing is written until the
 // confirmation dialog is accepted; the master files themselves are never
@@ -242,9 +242,9 @@ export function RenditionCleanupPage() {
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")
     if (which === "log") {
       const done = allFiles.filter((f) => outcome.has(f.id))
-      downloadText(filesToCsv(done, env, collection.name, new Map(Array.from(outcome.entries()).map(([id, o]) => [id, o === "failed" ? `failed: ${errors.get(id) ?? ""}` : o]))), `rendition-cleanup-log-${env}-${stamp}.csv`)
+      downloadText(filesToCsv(done, env, collection.name, new Map(Array.from(outcome.entries()).map(([id, o]) => [id, o === "failed" ? `failed: ${errors.get(id) ?? ""}` : o]))), `additional-file-cleanup-log-${env}-${stamp}.csv`)
     } else {
-      downloadText(filesToCsv(which === "selected" ? selectedFiles : visible, env, collection.name), `rendition-cleanup-${which}-${env}-${stamp}.csv`)
+      downloadText(filesToCsv(which === "selected" ? selectedFiles : visible, env, collection.name), `additional-file-cleanup-${which}-${env}-${stamp}.csv`)
     }
   }
 
@@ -257,7 +257,7 @@ export function RenditionCleanupPage() {
       <main className="flex-1 w-full px-6 py-6">
         <div>
           <p className="text-muted-foreground mb-8 max-w-3xl">
-            Pick a collection, scan the records in it, then remove renditions, crops or other additional files from each record&apos;s current master file version. Filter down to what you want gone, review the list, and confirm. Master files and versions are never touched.
+            Pick a collection, scan the records in it, then remove additional files, such as renditions, crops and trims, from each record&apos;s current master file version. Filter down to what you want gone, review the list, and confirm. Master files and versions are never touched.
           </p>
 
           <div className="grid gap-6 lg:grid-cols-2 mb-6">
