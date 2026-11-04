@@ -30,7 +30,7 @@ const TYPE_LABEL: Record<string, string> = {
   Threedimensional: "3D",
   Subtitle: "Subtitle",
   External: "External",
-  Custom: "Custom",
+  Custom: "Custom (preset rendition or other)",
   AdditionalFile: "Additional file",
 }
 
@@ -46,7 +46,8 @@ export function RenditionCleanupPage() {
   const [scans, setScans] = useState<RecordScan[] | null>(null)
   const [scanNote, setScanNote] = useState<string | null>(null)
 
-  const [typeFilter, setTypeFilter] = useState<Set<string>>(new Set(["OriginalRendition"]))
+  // No type pre-selected: tenants label preset renditions differently (Custom, OriginalRendition…), so show everything and let the user narrow.
+  const [typeFilter, setTypeFilter] = useState<Set<string>>(new Set())
   const [labelFilter, setLabelFilter] = useState<Set<string>>(new Set())
   const [extFilter, setExtFilter] = useState<Set<string>>(new Set())
   const [manualFilter, setManualFilter] = useState<"all" | "auto" | "manual">("all")
@@ -338,7 +339,7 @@ export function RenditionCleanupPage() {
                 <div className="flex flex-col gap-2 px-4 py-3 border-y border-border bg-muted/30 text-xs">
                   <FacetRow label="Type" items={typeFacet.map(([k, n]) => [k, n, TYPE_LABEL[k] ?? k] as const)} active={typeFilter} onToggle={(k) => toggleFacet(typeFilter, setTypeFilter, k)} onClear={() => setTypeFilter(new Set())} allLabel="All types" disabled={busy} />
                   {typeFilter.size > 0 && typeFacet.length > typeFilter.size && (
-                    <p className="text-[11px] text-muted-foreground pl-14">Showing {Array.from(typeFilter).map((t) => (TYPE_LABEL[t] ?? t).toLowerCase() + "s").join(" and ")} only. Click a type to add it, or All types to see crops, trims and other additional files too.</p>
+                    <p className="text-[11px] text-muted-foreground pl-14">Showing {Array.from(typeFilter).map((t) => (TYPE_LABEL[t] ?? t).toLowerCase()).join(" and ")} only. The type is whatever Aprimo recorded on the file; preset renditions often appear as Custom. Click a type to add it, or All types to clear.</p>
                   )}
                   <FacetRow label="Label" items={labelFacet.map(([k, n]) => [k, n, k] as const)} active={labelFilter} onToggle={(k) => toggleFacet(labelFilter, setLabelFilter, k)} disabled={busy} />
                   <FacetRow label="Format" items={extFacet.map(([k, n]) => [k, n, k] as const)} active={extFilter} onToggle={(k) => toggleFacet(extFilter, setExtFilter, k)} disabled={busy} />
