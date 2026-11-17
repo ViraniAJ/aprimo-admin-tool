@@ -106,40 +106,46 @@ function authorizeUrl(environment, clientId, codeChallenge, state) {
 }
 
 async function postToken(environment, body) {
-  // Electron's net.fetch goes through Chromium's network stack, so it honours
-  // the system proxy and the OS certificate store (corporate TLS inspection),
-  // which Node's built-in fetch does not. One retry covers a proxy or VPN
-  // that is still waking up on the first attempt.
+  // Primary: Node's fetch, which is what every release up to 1.1.7 used and
+  // which Aprimo's token endpoint parses reliably. Fallback: Electron's
+  // net.fetch (Chromium stack, honours the system proxy and OS trust store)
+  // for machines where Node cannot reach the host at all. 1.1.8 used
+  // net.fetch first and Aprimo answered invalid_client for valid secrets,
+  // so the Chromium path is only tried after a network-level failure, with
+  // an explicit Content-Length so the form body is never sent chunked.
   const url = tokenUrl(environment)
-  const init = {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams(body).toString(),
+  const form = new URLSearchParams(body).toString()
+  const isNetworkError = (e) => /fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|network|socket|certificate|ERR_/i.test(String(e?.message) + " " + String(e?.cause?.code ?? e?.cause?.message ?? ""))
+  const readResponse = async (res) => {
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error_description || data.error || `Token request failed (${res.status})`)
+    return data
   }
   let lastErr
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const res = await net.fetch(url, init)
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        throw new Error(data.error_description || data.error || `Token request failed (${res.status})`)
-      }
-      return data
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form })
+      return await readResponse(res)
     } catch (e) {
       lastErr = e
-      const transient = /fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|network|socket|certificate|ERR_/i.test(String(e?.message) + " " + String(e?.cause?.code ?? e?.cause?.message ?? ""))
-      if (attempt < 2 && transient) {
-        await new Promise((r) => setTimeout(r, 1500))
-        continue
-      }
-      break
+      if (!isNetworkError(e)) throw e
+      if (attempt === 1) await new Promise((r) => setTimeout(r, 1200))
     }
   }
+  try {
+    const buf = Buffer.from(form, "utf8")
+    const res = await net.fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": String(buf.length) },
+      body: buf,
+    })
+    return await readResponse(res)
+  } catch (e) {
+    if (!isNetworkError(e)) throw e
+    lastErr = e
+  }
   const cause = lastErr?.cause?.code || lastErr?.cause?.message
-  const msg = lastErr?.message === "fetch failed" || /^net::/.test(String(lastErr?.message))
-    ? `Could not reach ${new URL(url).host}${cause ? ` (${cause})` : lastErr?.message ? ` (${lastErr.message})` : ""}. Check your network, VPN or proxy and try again.`
-    : lastErr?.message ?? "Token request failed"
-  throw new Error(msg)
+  throw new Error(`Could not reach ${new URL(url).host}${cause ? ` (${cause})` : ""}. Check your network, VPN or proxy and try again.`)
 }
 
 function applyTokenResponse(data) {
