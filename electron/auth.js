@@ -161,6 +161,14 @@ function applyTokenResponse(data) {
 // exchange has succeeded.
 function login({ environment, clientId, clientSecret }) {
   return new Promise((resolve, reject) => {
+    clientSecret = typeof clientSecret === "string" ? clientSecret.trim() : ""
+    if (!clientSecret) {
+      // Fall back to the secret saved by the last successful sign-in for this registration.
+      const saved = loadState()
+      const matches = saved?.clientSecret && String(saved.environment).toLowerCase() === String(environment).toLowerCase() && saved.clientId === clientId
+      if (!matches) return reject(new Error("No saved client secret for this environment and client id. Enter the secret."))
+      clientSecret = saved.clientSecret
+    }
     const { codeVerifier, codeChallenge } = generatePkce()
     const state = base64url(crypto.randomBytes(16))
     current = { environment, clientId, clientSecret, accessToken: null, refreshToken: null, expiresAt: 0 }

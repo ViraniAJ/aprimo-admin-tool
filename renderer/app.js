@@ -414,26 +414,43 @@ async function init() {
   const restored = await window.aprimoAuth.restore()
   if (restored?.environment) { $("env").value = restored.environment }
   if (restored?.clientId) { $("clientId").value = restored.clientId }
+  // The saved secret is the one from the last successful sign-in. Offer it
+  // so nobody has to retype it (a stray space in a pasted secret gives
+  // Aprimo's invalid_client).
+  const savedFor = restored?.hasCredentials ? { environment: restored.environment, clientId: restored.clientId } : null
+  const refreshSecretHint = () => {
+    const same = savedFor && $("env").value.trim().toLowerCase() === String(savedFor.environment).toLowerCase() && $("clientId").value.trim() === savedFor.clientId
+    $("secretHint").textContent = same ? "A secret saved from your last successful sign-in will be used if you leave this blank." : ""
+    $("clientSecret").placeholder = same ? "Leave blank to use the saved secret" : ""
+  }
+  $("env").oninput = refreshSecretHint
+  $("clientId").oninput = refreshSecretHint
+  refreshSecretHint()
   if (restored?.signedIn) { await showHome() } else { showConnect() }
 
   $("loginBtn").onclick = async () => {
     const environment = $("env").value.trim()
     const clientId = $("clientId").value.trim()
-    const clientSecret = $("clientSecret").value
+    // Secrets never legitimately start or end with whitespace; a paste often adds some.
+    const typed = $("clientSecret").value.trim()
+    const canUseSaved = savedFor && environment.toLowerCase() === String(savedFor.environment).toLowerCase() && clientId === savedFor.clientId
     $("connectErr").classList.add("hidden")
-    if (!environment || !clientId || !clientSecret) {
+    if (!environment || !clientId || (!typed && !canUseSaved)) {
       $("connectErr").textContent = "Environment, Client ID, and Client Secret are all required."
       $("connectErr").classList.remove("hidden"); return
     }
     $("loginBtn").disabled = true
-    $("connectStatus").textContent = "Opening your browser to sign in…"
+    $("connectStatus").textContent = typed ? "Opening your browser to sign in…" : "Opening your browser to sign in (using the saved secret)…"
     try {
-      await window.aprimoAuth.login({ environment, clientId, clientSecret })
+      await window.aprimoAuth.login({ environment, clientId, clientSecret: typed || undefined })
       $("connectStatus").textContent = ""
       await showHome()
     } catch (e) {
       $("connectStatus").textContent = ""
-      $("connectErr").textContent = e?.message ?? "Sign-in failed."
+      let msg = e?.message ?? "Sign-in failed."
+      if (/invalid_client/i.test(msg)) msg += " — Aprimo rejected the client id and secret. Re-copy the secret from the registration (no spaces), or leave the field blank to reuse the last secret that worked."
+      if (/invalid_grant/i.test(msg)) msg += " — the one-time sign-in code was already used or expired; click Sign in again."
+      $("connectErr").textContent = msg
       $("connectErr").classList.remove("hidden")
     } finally {
       $("loginBtn").disabled = false
