@@ -19,7 +19,7 @@
 
 const http = require("http")
 const crypto = require("crypto")
-const { shell, safeStorage } = require("electron")
+const { shell, safeStorage, net } = require("electron")
 const fs = require("fs")
 const path = require("path")
 const os = require("os")
@@ -106,16 +106,40 @@ function authorizeUrl(environment, clientId, codeChallenge, state) {
 }
 
 async function postToken(environment, body) {
-  const res = await fetch(tokenUrl(environment), {
+  // Electron's net.fetch goes through Chromium's network stack, so it honours
+  // the system proxy and the OS certificate store (corporate TLS inspection),
+  // which Node's built-in fetch does not. One retry covers a proxy or VPN
+  // that is still waking up on the first attempt.
+  const url = tokenUrl(environment)
+  const init = {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(body).toString(),
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) {
-    throw new Error(data.error_description || data.error || `Token request failed (${res.status})`)
   }
-  return data
+  let lastErr
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await net.fetch(url, init)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data.error_description || data.error || `Token request failed (${res.status})`)
+      }
+      return data
+    } catch (e) {
+      lastErr = e
+      const transient = /fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|network|socket|certificate|ERR_/i.test(String(e?.message) + " " + String(e?.cause?.code ?? e?.cause?.message ?? ""))
+      if (attempt < 2 && transient) {
+        await new Promise((r) => setTimeout(r, 1500))
+        continue
+      }
+      break
+    }
+  }
+  const cause = lastErr?.cause?.code || lastErr?.cause?.message
+  const msg = lastErr?.message === "fetch failed" || /^net::/.test(String(lastErr?.message))
+    ? `Could not reach ${new URL(url).host}${cause ? ` (${cause})` : lastErr?.message ? ` (${lastErr.message})` : ""}. Check your network, VPN or proxy and try again.`
+    : lastErr?.message ?? "Token request failed"
+  throw new Error(msg)
 }
 
 function applyTokenResponse(data) {
