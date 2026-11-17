@@ -191,7 +191,18 @@ function login({ environment, clientId, clientSecret }) {
         done("Signed in successfully.")
         resolve({ hasRefreshToken: !!current.refreshToken })
       } catch (e) {
-        try { res.writeHead(500); res.end("Error") } catch {}
+        // Show the real reason in the browser tab; the app shows it too.
+        const msg = String(e?.message ?? e)
+        const hint = /invalid_client/i.test(msg)
+          ? "Aprimo rejected the client id and secret. Check the Client Secret against the registration, and that the registration is a confidential 'Authorization Code with PKCE' client."
+          : /invalid_grant/i.test(msg)
+            ? "The sign-in code was already used or has expired. Go back to the app and click Sign in again."
+            : "Go back to the app, check the details, and click Sign in again."
+        const esc = (t) => t.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c])
+        try {
+          res.writeHead(500, { "Content-Type": "text/html" })
+          res.end(`<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;padding:3rem;max-width:40rem;margin:auto"><h2>Sign-in did not complete</h2><p><code>${esc(msg)}</code></p><p>${esc(hint)}</p><p>You can close this tab.</p></body>`)
+        } catch {}
         server.close()
         reject(e)
       }
