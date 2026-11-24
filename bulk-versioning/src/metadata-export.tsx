@@ -322,7 +322,7 @@ export function MetadataExportPage() {
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
-      <main className="flex-1 w-full px-6 py-6">
+      <main className="flex-1 w-full min-w-0 px-6 py-6">
         <p className="text-muted-foreground mb-6 max-w-3xl">
           Export record metadata to CSV: every record, a search, a collection, or a list of record ids. Pick the fields, check a five-record preview, then export. The file is written as it goes, and an interrupted export picks up where it stopped. Nothing in Aprimo is changed.
         </p>
@@ -464,7 +464,7 @@ export function MetadataExportPage() {
         </div>
 
         {/* Step 3: preview and export */}
-        <Card className={`mb-6 ${stepCardClass(step3)}`}>
+        <Card className={`mb-6 min-w-0 ${stepCardClass(step3)}`}>
           <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
             <CardTitle className="text-lg flex items-center gap-2"><StepMarker n={3} state={step3} /> Preview and export</CardTitle>
             <div className="flex gap-2">
@@ -476,18 +476,21 @@ export function MetadataExportPage() {
               )}
             </div>
           </CardHeader>
-          <CardContent className="flex flex-col gap-4">
+          <CardContent className="flex flex-col gap-4 min-w-0">
             {preview && (
-              <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-2 min-w-0">
                 <p className="text-xs text-muted-foreground">{preview.total != null ? `About ${preview.total.toLocaleString()} record${preview.total === 1 ? "" : "s"} to export` : "Record count unknown until the export runs"} · {preview.head.length} columns{preview.total ? ` · at ~1,000 records per request, about ${Math.ceil(preview.total / 1000).toLocaleString()} requests` : ""}</p>
                 {preview.warning && <p className="text-xs text-amber-600 flex items-center gap-1.5"><AlertCircle className="h-3.5 w-3.5" /> {preview.warning}</p>}
                 {preview.rows.length > 0 && (
-                  <div className="overflow-x-auto rounded-md border border-border">
-                    <table className="text-[11px]">
-                      <thead className="bg-muted/50"><tr>{preview.head.map((h, i) => <th key={i} className="px-2 py-1 text-left font-medium whitespace-nowrap">{h}</th>)}</tr></thead>
-                      <tbody>{preview.rows.map((r, i) => <tr key={i} className="border-t border-border">{r.map((c, j) => <td key={j} className="px-2 py-1 max-w-[220px] truncate" title={c}>{c}</td>)}</tr>)}</tbody>
-                    </table>
-                  </div>
+                  <>
+                    <p className="text-[11px] text-muted-foreground">Showing all {preview.head.length} columns. Scroll sideways with the bar below the table; the record id stays pinned on the left.</p>
+                    <div className="scroll-x-visible rounded-md border border-border">
+                      <table className="text-[11px]">
+                        <thead className="bg-muted"><tr>{preview.head.map((h, i) => <th key={i} className={`px-2 py-1 text-left font-medium whitespace-nowrap ${i === 0 ? "sticky left-0 z-10 bg-muted border-r border-border" : ""}`}>{h}</th>)}</tr></thead>
+                        <tbody>{preview.rows.map((r, i) => <tr key={i} className="border-t border-border">{r.map((c, j) => <td key={j} className={`px-2 py-1 max-w-[220px] truncate ${j === 0 ? "sticky left-0 z-10 bg-card border-r border-border font-mono" : ""}`} title={c}>{c}</td>)}</tr>)}</tbody>
+                      </table>
+                    </div>
+                  </>
                 )}
               </div>
             )}
