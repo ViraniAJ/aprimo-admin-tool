@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react"
-import { Loader2, Eraser, Search, RefreshCw, CheckCircle2, AlertCircle, ExternalLink, Download, Link2 } from "lucide-react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { Loader2, Eraser, Search, RefreshCw, CheckCircle2, AlertCircle, ExternalLink, Download, Link2, FileSpreadsheet, FolderOpen } from "lucide-react"
 import { useAprimo } from "@/aprimo"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -11,15 +11,21 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { toast } from "sonner"
 import { formatBytes } from "@/lib/bulk-versioning"
+import { DropZone } from "@/components/ui/drop-zone"
+import { type IdImport, idsFromFile, idsFromText } from "@/lib/record-ids"
 import { type CollectionInfo, type ExtraFile, type RecordScan, listCollections, collectionRecordIds, scanRecord, scanRecords, mapLimit, failedScan, removeAdditionalFiles, filesToCsv, downloadText } from "@/lib/rendition-cleanup"
 
-// Additional File Cleanup: pick a collection, scan the master file's latest version
+// Additional File Cleanup: pick a collection (or load record ids from a CSV/Excel file or a pasted list), scan the master file's latest version
 // of every record in it, filter the additional files (renditions, crops,
 // trims…) and remove the selected ones. Nothing is written until the
 // confirmation dialog is accepted; the master files themselves are never
 // touched.
 
 type Outcome = "deleted" | "failed"
+type SourceMode = "collection" | "file"
+
+/** Records from a file are not capped at the collection limit, but a scan this size takes a while. */
+const MAX_FILE_IDS = 50_000
 
 const TYPE_LABEL: Record<string, string> = {
   OriginalRendition: "Rendition",
@@ -41,6 +47,14 @@ export function RenditionCleanupPage() {
   const [colError, setColError] = useState<string | null>(null)
   const [colQuery, setColQuery] = useState("")
   const [collection, setCollection] = useState<CollectionInfo | null>(null)
+
+  const [mode, setMode] = useState<SourceMode>("collection")
+  const [idList, setIdList] = useState<(IdImport & { name: string }) | null>(null)
+  const [idError, setIdError] = useState<string | null>(null)
+  const [reading, setReading] = useState(false)
+  const [dragging, setDragging] = useState(false)
+  const [pasted, setPasted] = useState("")
+  const fileInput = useRef<HTMLInputElement>(null)
 
   const [scanning, setScanning] = useState<{ done: number; total: number } | null>(null)
   const [scans, setScans] = useState<RecordScan[] | null>(null)
@@ -78,8 +92,55 @@ export function RenditionCleanupPage() {
   }, [collections, colQuery])
 
   // ── Scan ───────────────────────────────────────────────────────────────────
+  async function loadIdFile(file: File | undefined) {
+    if (!file) return
+    setIdError(null)
+    setReading(true)
+    try {
+      const got = await idsFromFile(file)
+      if (!got.ids.length) setIdError(got.invalidCount ? `No record ids in ${file.name}: ${got.source} holds ${got.invalidCount} value${got.invalidCount === 1 ? "" : "s"} that are not record ids.` : `No record ids found in ${file.name}. Put them in a column headed "Record ID" (or "Id").`)
+      else applyIds({ ...got, name: file.name })
+    } catch (e) {
+      setIdError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setReading(false)
+    }
+  }
+
+  function applyPasted() {
+    const got = idsFromText(pasted)
+    if (!got.ids.length) { setIdError("No record ids in the pasted text."); return }
+    setIdError(null)
+    applyIds({ ...got, name: "Pasted list" })
+  }
+
+  function applyIds(list: IdImport & { name: string }) {
+    if (list.ids.length > MAX_FILE_IDS) { setIdError(`${list.ids.length.toLocaleString()} record ids is more than the ${MAX_FILE_IDS.toLocaleString()} one scan can take. Split the file and run it in parts.`); return }
+    setIdList(list)
+    resetScan()
+  }
+
+  function resetScan() {
+    setScans(null)
+    setScanNote(null)
+    setSelected(new Set())
+    setOutcome(new Map())
+    setErrors(new Map())
+  }
+
+  function switchMode(m: SourceMode) {
+    if (m === mode) return
+    setMode(m)
+    setIdError(null)
+    resetScan()
+  }
+
+  const sourceReady = mode === "collection" ? !!collection : !!idList
+  const sourceName = mode === "collection" ? collection?.name ?? "" : idList?.name ?? ""
+  const sourceWhere = mode === "collection" ? "in the collection" : "in the list"
+
   async function scan() {
-    if (!client || !collection) return
+    if (!client || !sourceReady) return
     setScans(null)
     setScanNote(null)
     setSelected(new Set())
@@ -87,9 +148,9 @@ export function RenditionCleanupPage() {
     setErrors(new Map())
     setScanning({ done: 0, total: 0 })
     try {
-      const { ids, capped } = await collectionRecordIds(client, collection.id)
+      const { ids, capped } = mode === "collection" && collection ? await collectionRecordIds(client, collection.id) : { ids: idList?.ids ?? [], capped: false }
       if (!ids.length) {
-        setScanNote("This collection has no records, or none you can see.")
+        setScanNote(mode === "collection" ? "This collection has no records, or none you can see." : "The list has no record ids.")
         setScans([])
         return
       }
@@ -111,7 +172,7 @@ export function RenditionCleanupPage() {
     const byType = new Map<string, number>()
     for (const f of all) byType.set(f.type, (byType.get(f.type) ?? 0) + 1)
     const breakdown = Array.from(byType.entries()).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${n} ${(TYPE_LABEL[t] ?? t).toLowerCase()}${n === 1 ? "" : "s"}`).join(", ")
-    setScanNote(`${results.length} record${results.length === 1 ? "" : "s"} in the collection · ${results.length - failed} read · ${all.length} additional file${all.length === 1 ? "" : "s"}${breakdown ? ` (${breakdown})` : ""}${failed ? ` · ${failed} could not be read (retry below)` : ""}${capped ? " · stopped at 5000 records" : ""}`)
+    setScanNote(`${results.length} record${results.length === 1 ? "" : "s"} ${sourceWhere} · ${results.length - failed} read · ${all.length} additional file${all.length === 1 ? "" : "s"}${breakdown ? ` (${breakdown})` : ""}${failed ? ` · ${failed} could not be read (retry below)` : ""}${capped ? " · stopped at 5000 records" : ""}`)
   }
 
   /** Re-reads only the records that failed last time and merges them in. */
@@ -237,19 +298,20 @@ export function RenditionCleanupPage() {
   }
 
   function exportCsv(which: "selected" | "visible" | "log") {
-    if (!collection) return
+    if (!sourceReady) return
+    const sourceLabel = mode === "collection" ? `collection: ${sourceName}` : `record ids: ${sourceName}`
     const env = connection?.environment ?? "aprimo"
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")
     if (which === "log") {
       const done = allFiles.filter((f) => outcome.has(f.id))
-      downloadText(filesToCsv(done, env, collection.name, new Map(Array.from(outcome.entries()).map(([id, o]) => [id, o === "failed" ? `failed: ${errors.get(id) ?? ""}` : o]))), `additional-file-cleanup-log-${env}-${stamp}.csv`)
+      downloadText(filesToCsv(done, env, sourceLabel, new Map(Array.from(outcome.entries()).map(([id, o]) => [id, o === "failed" ? `failed: ${errors.get(id) ?? ""}` : o]))), `additional-file-cleanup-log-${env}-${stamp}.csv`)
     } else {
-      downloadText(filesToCsv(which === "selected" ? selectedFiles : visible, env, collection.name), `additional-file-cleanup-${which}-${env}-${stamp}.csv`)
+      downloadText(filesToCsv(which === "selected" ? selectedFiles : visible, env, sourceLabel), `additional-file-cleanup-${which}-${env}-${stamp}.csv`)
     }
   }
 
-  const step1: StepState = collection ? "done" : "active"
-  const step2: StepState = !collection ? "locked" : scans ? "done" : "active"
+  const step1: StepState = sourceReady ? "done" : "active"
+  const step2: StepState = !sourceReady ? "locked" : scans ? "done" : "active"
   const step3: StepState = !scans || !allFiles.length ? "locked" : "active"
 
   return (
@@ -257,14 +319,70 @@ export function RenditionCleanupPage() {
       <main className="flex-1 w-full px-6 py-6">
         <div>
           <p className="text-muted-foreground mb-8 max-w-3xl">
-            Pick a collection, scan the records in it, then remove additional files, such as renditions, crops and trims, from each record&apos;s current master file version. Filter down to what you want gone, review the list, and confirm. Master files and versions are never touched.
+            Pick a collection or load a CSV/Excel list of record ids, scan those records, then remove additional files, such as renditions, crops and trims, from each record&apos;s current master file version. Filter down to what you want gone, review the list, and confirm. Master files and versions are never touched.
           </p>
 
           <div className="grid gap-6 lg:grid-cols-2 mb-6">
-            {/* Step 1: collection */}
+            {/* Step 1: records */}
             <Card className={`flex flex-col ${stepCardClass(step1)}`}>
-              <CardHeader><CardTitle className="text-lg flex items-center gap-2"><StepMarker n={1} state={step1} /> Collection</CardTitle></CardHeader>
+              <CardHeader><CardTitle className="text-lg flex items-center gap-2"><StepMarker n={1} state={step1} /> Records</CardTitle></CardHeader>
               <CardContent className="flex flex-col gap-3">
+                <div className="inline-flex self-start rounded-md border border-border p-0.5 text-xs" role="tablist">
+                  {([["collection", "From a collection"], ["file", "From a file or list"]] as const).map(([k, l]) => (
+                    <button key={k} role="tab" aria-selected={mode === k} onClick={() => switchMode(k)} disabled={busy} className={`rounded px-3 py-1 transition-colors ${mode === k ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>{l}</button>
+                  ))}
+                </div>
+                {mode === "file" ? (
+                  <>
+                    <input ref={fileInput} type="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm" className="hidden" onChange={(e) => { loadIdFile(e.target.files?.[0]); e.target.value = "" }} />
+                    {idList ? (
+                      <div className="flex items-start gap-2 rounded-md border border-border px-3 py-2">
+                        <FileSpreadsheet className="w-4 h-4 mt-0.5 text-muted-foreground shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium truncate">{idList.name}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {idList.ids.length.toLocaleString()} record id{idList.ids.length === 1 ? "" : "s"} from {idList.source}
+                            {idList.duplicates > 0 && ` · ${idList.duplicates} duplicate${idList.duplicates === 1 ? "" : "s"} skipped`}
+                            {idList.invalidCount > 0 && <span className="text-amber-600"> · {idList.invalidCount} value{idList.invalidCount === 1 ? "" : "s"} skipped (not a record id)</span>}
+                          </div>
+                          {idList.invalid.length > 0 && (
+                            <details className="text-[11px] text-muted-foreground mt-1">
+                              <summary className="cursor-pointer">Skipped values</summary>
+                              <ul className="mt-1 list-disc pl-4 font-mono">{idList.invalid.map((v, i) => <li key={i} className="truncate">{v}</li>)}</ul>
+                              {idList.invalidCount > idList.invalid.length && <p>…and {idList.invalidCount - idList.invalid.length} more</p>}
+                            </details>
+                          )}
+                        </div>
+                        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => { setIdList(null); resetScan() }} disabled={busy}>Change</Button>
+                      </div>
+                    ) : (
+                      <>
+                        <DropZone
+                          isDragging={dragging}
+                          onDragOver={() => setDragging(true)}
+                          onDragLeave={() => setDragging(false)}
+                          onDrop={(e) => { setDragging(false); loadIdFile(e.dataTransfer.files?.[0]) }}
+                          onClick={() => !reading && fileInput.current?.click()}
+                          className="py-6"
+                        >
+                          {reading ? <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /> : (
+                            <>
+                              <FolderOpen className="h-7 w-7 text-muted-foreground mb-2" />
+                              <p className="text-sm font-medium">Drop a CSV or Excel file of record ids</p>
+                              <p className="text-xs text-muted-foreground mt-1">or click to browse · a column headed &quot;Record ID&quot; or &quot;Id&quot;, or just a column of ids</p>
+                            </>
+                          )}
+                        </DropZone>
+                        <div className="flex flex-col gap-1.5">
+                          <textarea value={pasted} onChange={(e) => setPasted(e.target.value)} disabled={busy} rows={3} placeholder="…or paste record ids, one per line" className="w-full rounded-md border border-border bg-background px-3 py-2 text-xs font-mono resize-y focus:outline-none focus:ring-2 focus:ring-ring" />
+                          <Button variant="outline" size="sm" className="self-start" onClick={applyPasted} disabled={busy || !pasted.trim()}>Use pasted ids</Button>
+                        </div>
+                      </>
+                    )}
+                    {idError && <p className="text-xs text-destructive">{idError}</p>}
+                    <p className="text-[11px] text-muted-foreground">Ids can be written with or without hyphens. A CSV exported from this tool works too: it reads the record_id column.</p>
+                  </>
+                ) : (<>
                 <div className="relative">
                   <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                   <Input className="pl-8" placeholder={collections ? `Search ${collections.length} collections…` : "Loading collections…"} value={colQuery} onChange={(e) => setColQuery(e.target.value)} disabled={!collections || busy} />
@@ -293,17 +411,18 @@ export function RenditionCleanupPage() {
                     {collections && collections.length > 50 && filteredCollections.length === 50 && <div className="text-[11px] text-muted-foreground px-3 py-1.5">Showing the first 50; type to narrow.</div>}
                   </div>
                 )}
+                </>)}
               </CardContent>
             </Card>
 
             {/* Step 2: scan */}
             <Card className={`flex flex-col ${stepCardClass(step2)}`} aria-disabled={step2 === "locked"}>
-              <CardHeader><CardTitle className="text-lg flex items-center gap-2"><StepMarker n={2} state={step2} /> Scan records{step2 === "locked" && <span className="text-xs font-normal text-muted-foreground">Pick a collection first</span>}</CardTitle></CardHeader>
+              <CardHeader><CardTitle className="text-lg flex items-center gap-2"><StepMarker n={2} state={step2} /> Scan records{step2 === "locked" && <span className="text-xs font-normal text-muted-foreground">{mode === "collection" ? "Pick a collection first" : "Load record ids first"}</span>}</CardTitle></CardHeader>
               <CardContent className="flex flex-col gap-3 flex-1">
-                <p className="text-sm text-muted-foreground">Reads the records in the collection in batches per request and lists the additional files on each master file&apos;s latest version, with type, label, size and whether a public link points at them. Nothing is changed.</p>
+                <p className="text-sm text-muted-foreground">Reads the records {mode === "collection" ? "in the collection" : "in your list"} in batches per request and lists the additional files on each master file&apos;s latest version, with type, label, size and whether a public link points at them. Nothing is changed.</p>
                 <div className="flex items-center gap-3">
-                  <Button onClick={scan} disabled={!collection || busy}>
-                    {scanning ? <><Loader2 className="w-4 h-4 animate-spin" /> Scanning…</> : <><RefreshCw className="w-4 h-4" /> {scans ? "Rescan" : "Scan collection"}</>}
+                  <Button onClick={scan} disabled={!sourceReady || busy}>
+                    {scanning ? <><Loader2 className="w-4 h-4 animate-spin" /> Scanning…</> : <><RefreshCw className="w-4 h-4" /> {scans ? "Rescan" : mode === "collection" ? "Scan collection" : `Scan ${idList?.ids.length.toLocaleString() ?? ""} records`}</>}
                   </Button>
                   {scanning && scanning.total > 0 && <span className="text-xs text-muted-foreground tabular-nums">{scanning.done} / {scanning.total} records</span>}
                 </div>
@@ -408,7 +527,7 @@ export function RenditionCleanupPage() {
             </Card>
           ) : (
             <Card className={`mb-6 ${stepCardClass("locked")}`} aria-disabled>
-              <CardHeader><CardTitle className="text-lg flex items-center gap-2"><StepMarker n={3} state="locked" /> Choose what to remove <span className="text-xs font-normal text-muted-foreground">{scans ? "No additional files found in this collection" : "Scan a collection first"}</span></CardTitle></CardHeader>
+              <CardHeader><CardTitle className="text-lg flex items-center gap-2"><StepMarker n={3} state="locked" /> Choose what to remove <span className="text-xs font-normal text-muted-foreground">{scans ? `No additional files found ${sourceWhere}` : "Scan the records first"}</span></CardTitle></CardHeader>
             </Card>
           )}
 
@@ -433,7 +552,7 @@ export function RenditionCleanupPage() {
                 <DialogDescription asChild>
                   <div className="space-y-2 text-sm">
                     <p>
-                      This deletes {selectedFiles.length} file{selectedFiles.length === 1 ? "" : "s"} ({formatBytes(selectedBytes)}) from {selectedRecords} record{selectedRecords === 1 ? "" : "s"} in <strong>{collection?.name}</strong> on <span className="font-mono">{connection?.environment}</span>. Master files and versions stay as they are.
+                      This deletes {selectedFiles.length} file{selectedFiles.length === 1 ? "" : "s"} ({formatBytes(selectedBytes)}) from {selectedRecords} record{selectedRecords === 1 ? "" : "s"} {mode === "collection" ? "in" : "from"} <strong>{sourceName}</strong> on <span className="font-mono">{connection?.environment}</span>. Master files and versions stay as they are.
                     </p>
                     {linkedSelected > 0 && <p className="text-amber-600"><strong>{linkedSelected}</strong> of them have public links. Those links stop working once the file is gone.</p>}
                     <p>This cannot be undone from here. Renditions from presets can be regenerated in Aprimo; manually uploaded files cannot.</p>
