@@ -116,6 +116,9 @@ export async function apiCall(api: Api, method: "GET" | "POST", path: string, op
     if (res.ok) return res.status === 204 ? null : res.json()
     const text = await res.text().catch(() => "")
     const msg = errorMessage(text) || `${res.status} ${res.statusText}`
+    // A server exception (a JSON body naming one) is usually the same every time: retry it once, not for minutes.
+    const serverException = res.status === 500 && /"exceptionType"/.test(text)
+    if (serverException && attempt >= 1) throw new ApiError(msg, res.status)
     if (res.status === 429 || res.status >= 500 || res.status === 401) {
       lastErr = new ApiError(msg, res.status)
       const ra = Number(res.headers.get("Retry-After"))
@@ -132,7 +135,7 @@ const backoff = (attempt: number) => Math.min(60_000, 1000 * 2 ** attempt) + Mat
 function errorMessage(text: string): string {
   try {
     const j = JSON.parse(text)
-    return j?.message ?? j?.Message ?? j?.error?.message ?? j?.title ?? text.slice(0, 300)
+    return j?.exceptionMessage ?? j?.message ?? j?.Message ?? j?.error?.message ?? j?.title ?? text.slice(0, 300)
   } catch {
     return text.slice(0, 300)
   }
@@ -166,20 +169,99 @@ export type Cursor =
 export interface ReadOptions {
   /** Field names for select-record-fields; empty = all fields. */
   fieldNames: string[]
+  /** Every field name, so a field Aprimo fails on can be left out even when "all fields" was chosen. */
+  allFieldNames?: string[]
+  /** Fields to leave out because Aprimo errors when returning them. */
+  excluded?: string[]
+  /** Ask for record properties only (id, dates, title…), no fields: used to learn which records a failing page holds. */
+  skeleton?: boolean
   masterFile: boolean
   pageSize: number
 }
 
 export interface Page { records: RawRecord[]; cursor: Cursor; total: number | null; missing: string[]; done: boolean }
 
+/** A page read as completely as Aprimo allows: fields it fails on are left out, records it fails on are listed. */
+export interface SafePage extends Page {
+  excluded: string[]
+  /** Aprimo's message for each field excluded on this page. */
+  excludedWhy: Record<string, string>
+  failed: Array<{ id: string; error: string }>
+}
+
 export const startCursor = (source: Source): Cursor => (source.kind === "ids" ? { kind: "ids", next: 0 } : { kind: "keyset", watermark: null, seen: [] })
 
 function selectHeaders(opts: ReadOptions): Record<string, string> {
+  if (opts.skeleton) return {}
+  const excluded = new Set((opts.excluded ?? []).map((f) => f.toLowerCase()))
+  const names = excluded.size
+    ? (opts.fieldNames.length ? opts.fieldNames : opts.allFieldNames ?? []).filter((f) => !excluded.has(f.toLowerCase()))
+    : opts.fieldNames
   return {
     "select-record": opts.masterFile ? "fields,masterfilelatestversion" : "fields",
-    ...(opts.fieldNames.length ? { "select-record-fields": opts.fieldNames.join(",") } : {}),
+    ...(names.length ? { "select-record-fields": names.join(",") } : {}),
     languages: "*",
   }
+}
+
+/** The field named in an Aprimo error such as "The default value calculation for field X didn't return a valid field value". */
+export function fieldInError(e: unknown): string | null {
+  const msg = e instanceof Error ? e.message : String(e)
+  const m = msg.match(/\bfield\s+['"]?([A-Za-z0-9_.\-]+)['"]?\s+(?:didn't|did not|could not|couldn't|failed|is|has)/i) ?? msg.match(/\bfor field\s+['"]?([A-Za-z0-9_.\-]+)/i)
+  return m ? m[1] : null
+}
+
+/**
+ * readPage that gets past records and fields Aprimo cannot return.
+ *  1. If the error names a field, read the page again without it (up to 8 fields per run).
+ *  2. If the page still fails, read it without fields to learn its records, then fetch those in groups of 100,
+ *     halving any group that fails until the record that breaks it is found. That record is reported, not fatal.
+ * The cursor is the same as the plain read, so paging carries on normally.
+ */
+export async function readPageSafe(api: Api, source: Source, cursor: Cursor, opts: ReadOptions, signal?: AbortSignal): Promise<SafePage> {
+  const excluded = [...(opts.excluded ?? [])]
+  const excludedWhy: Record<string, string> = {}
+  let lastErr: unknown
+  for (let i = 0; i < 9; i++) {
+    try {
+      const p = await readPage(api, source, cursor, { ...opts, excluded }, signal)
+      return { ...p, excluded, excludedWhy, failed: [] }
+    } catch (e) {
+      if ((e as Error)?.name === "AbortError") throw e
+      lastErr = e
+      const f = fieldInError(e)
+      if (f && excluded.length < 8 && !excluded.some((x) => x.toLowerCase() === f.toLowerCase())) { excluded.push(f); excludedWhy[f] = e instanceof Error ? e.message : String(e); continue }
+      break
+    }
+  }
+  let skel: Page
+  try {
+    skel = await readPage(api, source, cursor, { ...opts, excluded, skeleton: true }, signal)
+  } catch {
+    throw lastErr
+  }
+  const detailed = new Map<string, RawRecord>()
+  const failed: Array<{ id: string; error: string }> = []
+  const ids = skel.records.map((r) => nid(r.id))
+  const fetchIds = async (batch: string[]): Promise<void> => {
+    try {
+      const expression = batch.map((id) => `Id = '${id}'`).join(" OR ")
+      const res = await apiCall(api, "POST", "search/records", { query: { skip: 0, take: batch.length }, body: { searchExpression: { expression } }, headers: selectHeaders({ ...opts, excluded }), signal })
+      for (const r of (res?.items ?? []) as RawRecord[]) detailed.set(nid(r.id), r)
+    } catch (e) {
+      if ((e as Error)?.name === "AbortError") throw e
+      if (batch.length === 1) { failed.push({ id: batch[0], error: e instanceof Error ? e.message : String(e) }); return }
+      const half = Math.ceil(batch.length / 2)
+      await fetchIds(batch.slice(0, half))
+      await fetchIds(batch.slice(half))
+    }
+  }
+  for (let i = 0; i < ids.length; i += 100) {
+    await fetchIds(ids.slice(i, i + 100))
+    // Every record failing means the problem is not a few bad records; stop rather than read them one by one.
+    if (failed.length >= 25 && detailed.size === 0) throw lastErr
+  }
+  return { ...skel, records: skel.records.map((r) => detailed.get(nid(r.id)) ?? r), excluded, excludedWhy, failed }
 }
 
 const and = (left: string, right: string) => (left.trim() ? `(${left}) AND ${right}` : right)

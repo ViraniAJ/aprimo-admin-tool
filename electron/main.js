@@ -78,7 +78,8 @@ function allow(p) {
   const list = [p, ...allowed().filter((x) => x !== p)].slice(0, 50)
   fs.writeFileSync(allowListFile(), JSON.stringify(list))
 }
-const basePath = (p) => p.replace(/-part\d+(\.csv)$/i, "$1")
+// A chosen file also covers its -part2, -part3… continuations and its -warnings.csv companion.
+const basePath = (p) => p.replace(/-(?:part\d+|warnings)(\.csv)$/i, "$1")
 function assertAllowed(p) {
   if (typeof p !== "string" || !/\.csv$/i.test(p) || !allowed().includes(basePath(p))) throw new Error("That file was not chosen in a Save dialog")
 }

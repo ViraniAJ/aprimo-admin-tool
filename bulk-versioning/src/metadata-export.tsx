@@ -14,7 +14,7 @@ import { type CollectionInfo, listCollections, downloadText } from "@/lib/rendit
 import { type IdImport, idsFromFile, idsFromText } from "@/lib/record-ids"
 import {
   type Api, type Cursor, type FieldDef, type LanguageInfo, type RawRecord, type RowOptions, type Source,
-  NEUTRAL_LANGUAGE, apiCall, classificationIds, csvLine, header, loadFieldDefs, loadLanguages, missingFields, readPage, resolveCollection, startCursor, toRow,
+  NEUTRAL_LANGUAGE, apiCall, classificationIds, csvCell, csvLine, header, loadFieldDefs, loadLanguages, missingFields, readPageSafe, resolveCollection, startCursor, toRow,
 } from "@/lib/metadata-export"
 import { StepMarker, stepCardClass, type StepState } from "@/rendition-cleanup"
 
@@ -55,6 +55,12 @@ interface Checkpoint {
   written: number
   total: number | null
   missing: string[]
+  /** Fields left out because Aprimo errors when returning them; their column stays, empty. */
+  excluded?: string[]
+  /** Records Aprimo could not return; written with their basic columns only. */
+  failed?: Array<{ id: string; error: string }>
+  /** Aprimo's message for each excluded field. */
+  excludedWhy?: Record<string, string>
   startedAt: number
   finishedAt?: number
 }
@@ -65,6 +71,20 @@ const loadCheckpoint = (): Checkpoint | null => {
 const saveCheckpoint = (c: Checkpoint | null) => {
   try { if (c) localStorage.setItem(CHECKPOINT_KEY, JSON.stringify(c)); else localStorage.removeItem(CHECKPOINT_KEY) } catch { /* storage full or blocked: resume just won't be offered */ }
 }
+const warningsPathOf = (path: string) => path.replace(/\.csv$/i, "-warnings.csv")
+
+/** Writes the companion -warnings.csv beside the export when anything was left out, so whoever opens the CSV later can see why. */
+async function writeWarnings(c: Checkpoint) {
+  const rows: string[][] = []
+  for (const f of c.excluded ?? []) rows.push(["field left out", f, c.excludedWhy?.[f] ?? "Aprimo returned an error when calculating this field's value", "The column is in the export but empty for every record. Ask your Aprimo admin to check the field's default value calculation."])
+  for (const r of c.failed ?? []) rows.push(["record incomplete", r.id, r.error, "Only record_id, title, status, content type and dates were exported for this record."])
+  for (const id of c.missing) rows.push(["record not found", id, "Not returned by Aprimo", "Deleted, or not visible to the signed-in user."])
+  if (!rows.length) return
+  const text = "\uFEFF" + [`# Metadata Export warnings · ${c.environment} · ${c.sourceLabel} · ${new Date().toISOString()}`, "type,item,aprimo_message,what_it_means", ...rows.map((r) => r.map((x) => csvCell(x)).join(","))].join("\r\n") + "\r\n"
+  const f = await window.exportFiles.open(warningsPathOf(c.path))
+  try { await window.exportFiles.write(f.id, text) } finally { await window.exportFiles.close(f.id) }
+}
+
 const partPathOf = (path: string, part: number) => (part === 1 ? path : path.replace(/\.csv$/i, `-part${part}.csv`))
 const fmtDuration = (ms: number) => {
   const s = Math.max(0, Math.round(ms / 1000))
@@ -103,7 +123,7 @@ export function MetadataExportPage() {
   const [rate, setRate] = useState(3)
 
   // Step 3: preview and run
-  const [preview, setPreview] = useState<{ head: string[]; rows: string[][]; total: number | null; exact: boolean; notFound: number; warning?: string } | null>(null)
+  const [preview, setPreview] = useState<{ head: string[]; rows: string[][]; total: number | null; exact: boolean; notFound: number; excluded: string[]; failed: number; warning?: string } | null>(null)
   const [previewing, setPreviewing] = useState(false)
   const [resolving, setResolving] = useState<string | null>(null)
   const [cp, setCp] = useState<Checkpoint | null>(() => loadCheckpoint())
@@ -188,7 +208,7 @@ export function MetadataExportPage() {
   function readOptions(c: Config) {
     const o = rowOptions(c)
     // All fields: leave select-record-fields off rather than send a header listing hundreds of names.
-    return { fieldNames: defs && o.fields.length === defs.length ? [] : o.fields.map((f) => f.name), masterFile: c.masterFile, pageSize: c.pageSize }
+    return { allFieldNames: (defs ?? []).map((f) => f.name), fieldNames: defs && o.fields.length === defs.length ? [] : o.fields.map((f) => f.name), masterFile: c.masterFile, pageSize: c.pageSize }
   }
 
   async function lookupClassifications(records: RawRecord[], o: RowOptions, signal?: AbortSignal) {
@@ -217,7 +237,7 @@ export function MetadataExportPage() {
       const c = config()
       let source = await getSource()
       if (source.kind === "ids") source = { kind: "ids", ids: source.ids.slice(0, 5) }
-      const page = await readPage({ ...api, rate: 0 }, source, startCursor(source), { ...readOptions(c), pageSize: 5 })
+      const page = await readPageSafe({ ...api, rate: 0 }, source, startCursor(source), { ...readOptions(c), pageSize: 5 })
       const o = rowOptions(c)
       await lookupClassifications(page.records, o)
       // Fewer than five back, and nothing left to read: that is the whole set, so the count is exact, not Aprimo's estimate.
@@ -232,6 +252,8 @@ export function MetadataExportPage() {
         total,
         exact: wholeSet,
         notFound,
+        excluded: page.excluded,
+        failed: page.failed.length,
         warning: !page.records.length ? "No records matched." : missing.length ? "These records came back without any field values. The API may not be returning fields for this search; check the field selection and try again." : undefined,
       })
     } catch (e) {
@@ -273,7 +295,7 @@ export function MetadataExportPage() {
       setCp(state)
       saveCheckpoint(state)
       for (;;) {
-        const page = await readPage(pacing, state.source, state.cursor, ro, ctl.signal)
+        const page = await readPageSafe(pacing, state.source, state.cursor, { ...ro, excluded: state.excluded ?? [] }, ctl.signal)
         await lookupClassifications(page.records, o, ctl.signal)
         if (page.records.length && state.rowsInPart >= ROWS_PER_FILE) {
           await window.exportFiles.close(file.id)
@@ -292,6 +314,9 @@ export function MetadataExportPage() {
           rowsInPart: state.rowsInPart + page.records.length,
           total: state.source.kind === "ids" ? state.source.ids.length : state.total ?? page.total,
           missing: page.missing.length ? [...state.missing, ...page.missing] : state.missing,
+          excluded: page.excluded,
+          excludedWhy: { ...state.excludedWhy, ...page.excludedWhy },
+          failed: page.failed.length ? [...(state.failed ?? []), ...page.failed] : state.failed,
           finishedAt: page.done ? Date.now() : undefined,
         }
         saveCheckpoint(state)
@@ -302,11 +327,15 @@ export function MetadataExportPage() {
         if (window5.length > 1) setRateNow(((state.written - window5[0][1]) / (now - window5[0][0])) * 1000)
         if (page.done) break
       }
-      toast.success(`Exported ${state.written.toLocaleString()} records`)
+      const nSkipped = state.excluded?.length ?? 0
+      const nFailed = state.failed?.length ?? 0
+      if (nSkipped || nFailed) toast.warning(`Exported ${state.written.toLocaleString()} records with warnings: ${[nSkipped && `${nSkipped} field${nSkipped === 1 ? "" : "s"} left out`, nFailed && `${nFailed} record${nFailed === 1 ? "" : "s"} incomplete`].filter(Boolean).join(", ")}. Details are in ${warningsPathOf(state.path).split(/[\\/]/).pop()}.`, { duration: 15_000 })
+      else toast.success(`Exported ${state.written.toLocaleString()} records`)
     } catch (e) {
       if ((e as Error)?.name !== "AbortError") setRunError(e instanceof Error ? e.message : String(e))
     } finally {
       await window.exportFiles.close(file.id).catch(() => {})
+      await writeWarnings(state).catch(() => {})
       setRunning(false)
       abort.current = null
     }
@@ -489,6 +518,8 @@ export function MetadataExportPage() {
                   ? `${preview.total === 0 ? "No records" : preview.total === 1 ? "1 record" : `${preview.total} records`} to export${preview.total ? `, ${preview.total === 1 ? "shown" : "all shown"} below` : ""}${preview.notFound ? ` · ${preview.notFound} id${preview.notFound === 1 ? "" : "s"} not found` : ""}`
                   : `Showing the first ${preview.rows.length} of ${preview.total != null ? `about ${preview.total.toLocaleString()}` : "an unknown number of"} records`} · {preview.head.length} columns{!preview.exact && preview.total ? ` · at ~1,000 records per request, about ${Math.ceil(preview.total / 1000).toLocaleString()} requests` : ""}</p>
                 {preview.warning && <p className="text-xs text-amber-600 flex items-center gap-1.5"><AlertCircle className="h-3.5 w-3.5" /> {preview.warning}</p>}
+                {preview.excluded.length > 0 && <ExcludedNote fields={preview.excluded} />}
+                {preview.failed > 0 && <p className="text-xs text-amber-600 flex items-center gap-1.5"><AlertCircle className="h-3.5 w-3.5" /> Aprimo could not return {preview.failed} of these record{preview.failed === 1 ? "" : "s"}; they are exported with their basic columns only and listed after the export.</p>}
                 {preview.rows.length > 0 && (
                   <>
                     <p className="text-[11px] text-muted-foreground">Showing all {preview.head.length} columns. Scroll sideways with the bar below the table; the record id stays pinned on the left.</p>
@@ -524,6 +555,16 @@ export function MetadataExportPage() {
                   )}
                   {cpHere.finishedAt && !running && <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={discard}>Clear</Button>}
                 </div>
+                {(cpHere.excluded?.length ?? 0) > 0 && <ExcludedNote fields={cpHere.excluded!} />}
+                {((cpHere.excluded?.length ?? 0) > 0 || (cpHere.failed?.length ?? 0) > 0 || cpHere.missing.length > 0) && (
+                  <p className="text-xs text-muted-foreground">These warnings are also saved beside the export as <span className="font-mono">{warningsPathOf(cpHere.path).split(/[\\/]/).pop()}</span>, so anyone opening the CSV can see why something is empty.</p>
+                )}
+                {(cpHere.failed?.length ?? 0) > 0 && (
+                  <div className="flex items-center gap-2 text-xs text-amber-600">
+                    <AlertCircle className="h-3.5 w-3.5" /> {cpHere.failed!.length.toLocaleString()} record{cpHere.failed!.length === 1 ? "" : "s"} Aprimo could not return; written with id, title, status and dates only.
+                    <Button variant="ghost" size="sm" className="h-6 text-xs text-amber-600" onClick={() => downloadText(`record_id,error\r\n${cpHere.failed!.map((f) => `${f.id},"${f.error.replace(/"/g, '""')}"`).join("\r\n")}\r\n`, `metadata-export-failed-${environment}.csv`)}>Save list</Button>
+                  </div>
+                )}
                 {runError && !unfinished && <p className="text-xs text-destructive">{runError}</p>}
               </div>
             )}
@@ -532,5 +573,15 @@ export function MetadataExportPage() {
         </Card>
       </main>
     </div>
+  )
+}
+
+/** Fields Aprimo failed on and that were left out of the export. */
+function ExcludedNote({ fields }: { fields: string[] }) {
+  return (
+    <p className="text-xs text-amber-600 flex items-start gap-1.5">
+      <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+      <span>Aprimo returned an error when calculating {fields.length === 1 ? "the field" : "these fields"} <strong>{fields.join(", ")}</strong>, so {fields.length === 1 ? "it was" : "they were"} left out and {fields.length === 1 ? "its column is" : "their columns are"} empty. Everything else exported normally. Ask your Aprimo admin to check {fields.length === 1 ? "that field's" : "those fields'"} default value calculation.</span>
+    </p>
   )
 }
