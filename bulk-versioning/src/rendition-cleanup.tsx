@@ -595,13 +595,13 @@ function FacetRow({ label, items, active, onToggle, onClear, allLabel, disabled 
   )
 }
 
-type StepState = "active" | "done" | "locked"
-function stepCardClass(state: StepState): string {
+export type StepState = "active" | "done" | "locked"
+export function stepCardClass(state: StepState): string {
   if (state === "active") return "ring-2 ring-primary shadow-lg transition-all duration-300"
   if (state === "done") return "transition-all duration-300"
   return "opacity-45 pointer-events-none select-none grayscale-[40%] transition-all duration-300"
 }
-function StepMarker({ n, state }: { n: number; state: StepState }) {
+export function StepMarker({ n, state }: { n: number; state: StepState }) {
   if (state === "done") return <span className="h-6 w-6 rounded-full bg-green-600 text-white flex items-center justify-center shrink-0"><CheckCircle2 className="h-4 w-4" /></span>
   return <span className={`h-6 w-6 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 ${state === "active" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground border border-border"}`}>{n}</span>
 }

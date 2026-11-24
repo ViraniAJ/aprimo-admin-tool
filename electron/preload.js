@@ -11,3 +11,13 @@ contextBridge.exposeInMainWorld("aprimoAuth", {
   getAccessToken: () => ipcRenderer.invoke("auth:getAccessToken"),
   redirectUri: () => ipcRenderer.invoke("auth:redirectUri"),
 })
+
+// Metadata Export writes its CSV through the main process, only to files the
+// user picked in a Save dialog.
+contextBridge.exposeInMainWorld("exportFiles", {
+  choose: (defaultName) => ipcRenderer.invoke("export:choose", defaultName),
+  open: (path, resumeAt) => ipcRenderer.invoke("export:open", { path, resumeAt }),
+  write: (id, text) => ipcRenderer.invoke("export:write", { id, text }),
+  close: (id) => ipcRenderer.invoke("export:close", id),
+  reveal: (path) => ipcRenderer.invoke("export:reveal", path),
+})

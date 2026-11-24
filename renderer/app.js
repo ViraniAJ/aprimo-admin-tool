@@ -467,6 +467,7 @@ async function init() {
   $("tileBulkVersioning").onclick = () => { window.location.href = "bulk-versioning.html" }
   $("tileBulkPreviews").onclick = () => { window.location.href = "bulk-versioning.html?mode=preview" }
   $("tileRenditionCleanup").onclick = () => { window.location.href = "bulk-versioning.html?tool=cleanup" }
+  $("tileMetadataExport").onclick = () => { window.location.href = "bulk-versioning.html?tool=export" }
 
   // Classifications tool controls
   $("reloadBtn").onclick = () => load()
