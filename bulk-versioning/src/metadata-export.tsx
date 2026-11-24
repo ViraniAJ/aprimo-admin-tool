@@ -103,7 +103,7 @@ export function MetadataExportPage() {
   const [rate, setRate] = useState(3)
 
   // Step 3: preview and run
-  const [preview, setPreview] = useState<{ head: string[]; rows: string[][]; total: number | null; warning?: string } | null>(null)
+  const [preview, setPreview] = useState<{ head: string[]; rows: string[][]; total: number | null; exact: boolean; notFound: number; warning?: string } | null>(null)
   const [previewing, setPreviewing] = useState(false)
   const [resolving, setResolving] = useState<string | null>(null)
   const [cp, setCp] = useState<Checkpoint | null>(() => loadCheckpoint())
@@ -220,12 +220,18 @@ export function MetadataExportPage() {
       const page = await readPage({ ...api, rate: 0 }, source, startCursor(source), { ...readOptions(c), pageSize: 5 })
       const o = rowOptions(c)
       await lookupClassifications(page.records, o)
-      const total = mode === "file" ? idList?.ids.length ?? null : resolved.current?.source.kind === "ids" && mode === "collection" ? (resolved.current.source as { ids: string[] }).ids.length : page.total
+      // Fewer than five back, and nothing left to read: that is the whole set, so the count is exact, not Aprimo's estimate.
+      const full = await getSource()
+      const wholeSet = full.kind === "ids" ? full.ids.length <= 5 : page.done
+      const total = wholeSet ? page.records.length : full.kind === "ids" ? full.ids.length : page.total
+      const notFound = wholeSet && full.kind === "ids" ? full.ids.length - page.records.length : 0
       const missing = missingFields(page.records, o)
       setPreview({
         head: header(o),
         rows: page.records.slice(0, 5).map((r) => toRow(r, o, classNames.current)),
         total,
+        exact: wholeSet,
+        notFound,
         warning: !page.records.length ? "No records matched." : missing.length ? "These records came back without any field values. The API may not be returning fields for this search; check the field selection and try again." : undefined,
       })
     } catch (e) {
@@ -468,7 +474,7 @@ export function MetadataExportPage() {
           <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
             <CardTitle className="text-lg flex items-center gap-2"><StepMarker n={3} state={step3} /> Preview and export</CardTitle>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={runPreview} disabled={!sourceReady || !defs || busy}>{previewing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Eye className="w-4 h-4" />} Preview 5 records</Button>
+              <Button variant="outline" onClick={runPreview} disabled={!sourceReady || !defs || busy}>{previewing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Eye className="w-4 h-4" />} Preview</Button>
               {running ? (
                 <Button variant="outline" onClick={() => abort.current?.abort()}><Pause className="w-4 h-4" /> Pause</Button>
               ) : (
@@ -479,7 +485,9 @@ export function MetadataExportPage() {
           <CardContent className="flex flex-col gap-4 min-w-0">
             {preview && (
               <div className="flex flex-col gap-2 min-w-0">
-                <p className="text-xs text-muted-foreground">{preview.total != null ? `About ${preview.total.toLocaleString()} record${preview.total === 1 ? "" : "s"} to export` : "Record count unknown until the export runs"} · {preview.head.length} columns{preview.total ? ` · at ~1,000 records per request, about ${Math.ceil(preview.total / 1000).toLocaleString()} requests` : ""}</p>
+                <p className="text-xs text-muted-foreground">{preview.exact
+                  ? `${preview.total === 0 ? "No records" : preview.total === 1 ? "1 record" : `${preview.total} records`} to export${preview.total ? `, ${preview.total === 1 ? "shown" : "all shown"} below` : ""}${preview.notFound ? ` · ${preview.notFound} id${preview.notFound === 1 ? "" : "s"} not found` : ""}`
+                  : `Showing the first ${preview.rows.length} of ${preview.total != null ? `about ${preview.total.toLocaleString()}` : "an unknown number of"} records`} · {preview.head.length} columns{!preview.exact && preview.total ? ` · at ~1,000 records per request, about ${Math.ceil(preview.total / 1000).toLocaleString()} requests` : ""}</p>
                 {preview.warning && <p className="text-xs text-amber-600 flex items-center gap-1.5"><AlertCircle className="h-3.5 w-3.5" /> {preview.warning}</p>}
                 {preview.rows.length > 0 && (
                   <>
@@ -519,7 +527,7 @@ export function MetadataExportPage() {
                 {runError && !unfinished && <p className="text-xs text-destructive">{runError}</p>}
               </div>
             )}
-            {!preview && !cpHere && <p className="text-xs text-muted-foreground flex items-center gap-1.5"><Play className="h-3.5 w-3.5" /> Preview first to check the columns, the language and the record count, then export.</p>}
+            {!preview && !cpHere && <p className="text-xs text-muted-foreground flex items-center gap-1.5"><Play className="h-3.5 w-3.5" /> Preview first to check the columns, the language and the record count (it shows up to five records), then export.</p>}
           </CardContent>
         </Card>
       </main>
