@@ -185,8 +185,9 @@ export function RenditionCleanupPage() {
       const redo = failedIds.length > 5
         ? await scanRecords(client, failedIds, (done, total) => setScanning({ done, total }))
         : await mapLimit(failedIds, 2, (id) => scanRecord(client, id), (done) => setScanning({ done, total: failedIds.length }), failedScan)
-      const byId = new Map(redo.map((r) => [r.recordId, r]))
-      const merged = scans.map((r) => byId.get(r.recordId) ?? r)
+      const key = (id: string) => id.replace(/[-{}]/g, "").toLowerCase()
+      const byId = new Map(redo.map((r, i) => [key(failedIds[i] ?? r.recordId), r]))
+      const merged = scans.map((r) => byId.get(key(r.recordId)) ?? r)
       setScans(merged)
       describe(merged)
     } finally {

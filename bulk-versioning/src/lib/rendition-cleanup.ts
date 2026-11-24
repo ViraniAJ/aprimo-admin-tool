@@ -142,6 +142,9 @@ export const SCAN_BATCH = 40
  * not return (no permission, deleted) fall back to a per-record read so the
  * error is specific. `onProgress` reports records accounted for so far.
  */
+/** Compares record ids however they were written: case and hyphens ignored. */
+const idKey = (id: string) => id.replace(/[-{}]/g, "").toLowerCase()
+
 export async function scanRecords(client: AprimoClient, ids: string[], onProgress?: (done: number, total: number) => void): Promise<RecordScan[]> {
   const byId = new Map<string, RecordScan>()
   const batches: string[][] = []
@@ -154,7 +157,7 @@ export async function scanRecords(client: AprimoClient, ids: string[], onProgres
       const expression = batch.map((id) => `Id = '${id}'`).join(" OR ")
       const r = await client.search.records({ searchExpression: { expression }, page: 1, pageSize: SCAN_BATCH }, SCAN_EXPANDER())
       if (!r.ok) throw new ScanError(r.error?.message ?? "Search failed", r.status)
-      for (const rec of ((r.data as unknown as { items?: RawRecord[] })?.items ?? [])) byId.set(rec.id.toLowerCase(), toScan(rec))
+      for (const rec of ((r.data as unknown as { items?: RawRecord[] })?.items ?? [])) byId.set(idKey(rec.id), toScan(rec))
       done += batch.length
       onProgress?.(Math.min(done, ids.length), ids.length)
       return null
@@ -163,13 +166,13 @@ export async function scanRecords(client: AprimoClient, ids: string[], onProgres
     () => null,
   )
   // Anything the batches missed gets an individual read, which also yields a precise error.
-  const missing = ids.filter((id) => !byId.has(id.toLowerCase()))
+  const missing = ids.filter((id) => !byId.has(idKey(id)))
   if (missing.length) {
     const singles = await mapLimit(missing, 2, (id) => scanRecord(client, id), undefined, failedScan)
-    for (const sc of singles) byId.set(sc.recordId.toLowerCase(), sc)
+    for (const sc of singles) byId.set(idKey(sc.recordId), sc)
   }
   onProgress?.(ids.length, ids.length)
-  return ids.map((id) => byId.get(id.toLowerCase()) ?? failedScan(id, new Error("Not returned by search")))
+  return ids.map((id) => byId.get(idKey(id)) ?? failedScan(id, new Error("Not returned by search")))
 }
 
 /** One record's master version with its additional files and which of them carry public links. */

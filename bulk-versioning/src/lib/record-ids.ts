@@ -1,7 +1,7 @@
 // Record ids from a spreadsheet or pasted text, for tools that otherwise start from a collection.
 // Accepts .csv / .tsv / .txt and .xlsx. Finds the id column by its header (Record ID, record_id, Id…);
 // without a recognisable header it uses the column holding the most GUIDs. Ids may be written with or
-// without hyphens (the DAM UI shows them without) and come back hyphenated and lower-case.
+// without hyphens and come back in Aprimo's form: 32 lower-case hex characters, no hyphens.
 
 export interface IdImport {
   /** Unique record ids in file order. */
@@ -21,7 +21,8 @@ const MAX_INVALID_SHOWN = 20
 
 export function normalizeId(raw: unknown): string | null {
   const m = String(raw ?? "").trim().match(GUID)
-  return m ? `${m[1]}-${m[2]}-${m[3]}-${m[4]}-${m[5]}`.toLowerCase() : null
+  // Aprimo's own form: 32 hex characters, no hyphens or braces (the API rejects or misses the hyphenated form).
+  return m ? `${m[1]}${m[2]}${m[3]}${m[4]}${m[5]}`.toLowerCase() : null
 }
 
 const headerKey = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "")
