@@ -285,9 +285,11 @@ function fieldsOf(r: RawRecord): RawField[] {
 }
 
 function valuesOf(lv: { value?: unknown; values?: unknown[] }): string[] {
-  if (Array.isArray(lv.values) && lv.values.length) return lv.values.map((v) => String(v ?? "")).filter(Boolean)
-  if (lv.value == null || lv.value === "") return []
-  return [typeof lv.value === "object" ? JSON.stringify(lv.value) : String(lv.value)]
+  const text = (v: unknown) => (v == null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v))
+  if (Array.isArray(lv.values) && lv.values.length) return lv.values.map(text).filter(Boolean)
+  if (Array.isArray(lv.value)) return lv.value.map(text).filter(Boolean)
+  const t = text(lv.value)
+  return t ? [t] : []
 }
 
 const labelFor = (labels: Label[] | undefined, lang: string, fallback: string) =>
@@ -301,9 +303,17 @@ export function toRow(r: RawRecord, o: RowOptions, classNames: Map<string, strin
   if (o.masterFile) cells.push(mf?.fileName ?? "", mf?.fileExtension ?? "", mf?.fileSize != null ? String(mf.fileSize) : "")
   for (const def of o.fields) {
     const f = byName.get(def.name.toLowerCase())
-    const lvs = (f?.localizedValues ?? []).filter((lv) => valuesOf(lv).length)
-    const render = (lv: { value?: unknown; values?: unknown[] }, lang: string) =>
-      valuesOf(lv).map((v) => {
+    // Group values by language. A list field can arrive as one entry with `values`, or as several entries with one
+    // `value` each under the same language; either way every value is kept, in order.
+    const byLang = new Map<string, string[]>()
+    for (const lv of f?.localizedValues ?? []) {
+      const vals = valuesOf(lv)
+      if (!vals.length) continue
+      const id = nid(lv.languageId) || NEUTRAL_LANGUAGE
+      byLang.set(id, [...(byLang.get(id) ?? []), ...vals])
+    }
+    const render = (vals: string[], lang: string) =>
+      vals.map((v) => {
         if (!o.names) return v
         if (def.items) { const it = def.items.get(nid(v)); return it ? labelFor(it.labels, lang, it.label || it.name) : v }
         if (def.dataType === "ClassificationList") return classNames.get(nid(v)) ?? v
@@ -311,12 +321,13 @@ export function toRow(r: RawRecord, o: RowOptions, classNames: Map<string, strin
       }).join(o.multiSeparator)
     let cell = ""
     if (o.language === "*") {
-      cell = lvs.length <= 1
-        ? (lvs[0] ? render(lvs[0], nid(lvs[0].languageId)) : "")
-        : lvs.map((lv) => { const id = nid(lv.languageId); return `[${id === NEUTRAL_LANGUAGE ? "neutral" : culture.get(id) ?? id}] ${render(lv, id)}` }).join(" || ")
+      const groups = Array.from(byLang.entries())
+      cell = groups.length <= 1
+        ? (groups[0] ? render(groups[0][1], groups[0][0]) : "")
+        : groups.map(([id, vals]) => `[${id === NEUTRAL_LANGUAGE ? "neutral" : culture.get(id) ?? id}] ${render(vals, id)}`).join(" || ")
     } else {
-      const lv = lvs.find((x) => nid(x.languageId) === o.language) ?? lvs.find((x) => nid(x.languageId) === NEUTRAL_LANGUAGE)
-      cell = lv ? render(lv, o.language) : ""
+      const vals = byLang.get(o.language) ?? byLang.get(NEUTRAL_LANGUAGE)
+      cell = vals ? render(vals, o.language) : ""
     }
     cells.push(cell)
   }
