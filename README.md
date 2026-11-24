@@ -50,9 +50,13 @@ Pick classifications from the tree (a parent includes all of its children), then
 The same matching flow as Bulk Versioning, but each matched file is added as a **preview** on the record's current master file version; the master file itself is not changed. Useful for dropping a folder of rendered thumbnails or alternate previews onto existing records.
 
 ### Additional File Cleanup
-Pick a collection, scan every record's master file latest version, and remove additional files such as renditions, crops and trims in bulk, filtered by type, label, format and origin. Files with public links are hidden by default; a confirmation dialog states counts, size and records before anything is removed. Master files and versions are never touched. Exports CSVs of the shown list, the selection and the outcome log.
+Pick a collection or upload record ids, scan every record's master file latest version, and remove additional files such as renditions, crops and trims in bulk, filtered by type, label, format and origin. Files with public links are hidden by default; a confirmation dialog states counts, size and records before anything is removed. Master files and versions are never touched. Exports CSVs of the shown list, the selection and the outcome log.
 
-Bulk Versioning, Bulk Previews and Additional File Cleanup are the desktop build of the corresponding pages in [virani-editor-tools](https://github.com/ViraniAJ/aprimo-editor-tools). Its source lives in `bulk-versioning/src` (React + Tailwind, bundled by esbuild into `renderer/bulk-versioning.js` and `.css`) and runs as its own page so its styles never touch the other tools. The matching logic in `bulk-versioning/src/lib` is shared with the web version; keep the two in step when changing it.
+### Metadata Export
+
+Exports record metadata to CSV for every record, a search expression, a collection, or an uploaded list of record ids. Pick the fields (option and classification values come out as names), one language or all, and preview five rows before exporting. Built for hundreds of thousands of records: keyset paging by created date in pages of 1,000, paced and retried requests, the file streamed to disk, a new file every million rows, and a checkpoint after each page so a stopped export resumes where it left off. The paging approach follows Aprimo's [DAM Metadata Extract Utility](https://github.com/Aprimo-Connect/dam-metadata-extract-utility) (BSD-3-Clause).
+
+Bulk Versioning, Bulk Previews, Additional File Cleanup and Metadata Export share one React page. The first three are the desktop build of the corresponding pages in [virani-editor-tools](https://github.com/ViraniAJ/aprimo-editor-tools). Its source lives in `bulk-versioning/src` (React + Tailwind, bundled by esbuild into `renderer/bulk-versioning.js` and `.css`) and runs as its own page so its styles never touch the other tools. The matching logic in `bulk-versioning/src/lib` is shared with the web version; keep the two in step when changing it.
 
 ## How auth works
 
