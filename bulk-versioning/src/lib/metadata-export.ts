@@ -317,15 +317,14 @@ export async function resolveCollection(api: Api, collectionId: string, signal?:
     const expression = typeof se === "string" ? se : se.expression
     if (expression) return { kind: "expression", expression, parameters: se.parameters, namedParameters: se.namedParameters }
   }
-  const ids: string[] = []
-  for (let page = 1; ; page++) {
-    const res = await apiCall(api, "GET", `collection/${collectionId}/records`, { query: { page, pageSize: MAX_PAGE }, signal })
-    const items = (res?.items ?? []) as Array<{ id: string }>
-    ids.push(...items.map((r) => nid(r.id)))
-    onProgress?.(ids.length)
-    if (items.length < MAX_PAGE) break
-  }
-  return { kind: "ids", ids: Array.from(new Set(ids)) }
+  // This endpoint is not paged (Aprimo's OpenAPI: "a non-paged collection of records"): one call returns the whole
+  // collection, and page/pageSize are ignored. Paging it re-read the same records forever (a 4,205-record collection
+  // counted up to 382,655), so read it once and drop any repeated ids.
+  const res = await apiCall(api, "GET", `collection/${collectionId}/records`, { signal })
+  const seen = new Set<string>()
+  for (const r of (res?.items ?? []) as Array<{ id: string }>) if (r?.id) seen.add(nid(r.id))
+  onProgress?.(seen.size)
+  return { kind: "ids", ids: Array.from(seen) }
 }
 
 // ── Rows ────────────────────────────────────────────────────────────────────
